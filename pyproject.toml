@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "homie-isaaclab"
+version = "0.1.0"
+description = "HOMIE G1 task and HIM-PPO for the Isaac Lab 3 training entrypoint"
+requires-python = ">=3.12,<3.13"
+
+[tool.setuptools]
+packages = ["homie_isaaclab", "homie_rsl_rl", "homie_rsl_rl.algorithms", "homie_rsl_rl.modules", "homie_rsl_rl.storage", "homie_rsl_rl.utils"]
+
+[tool.setuptools.package-dir]
+homie_isaaclab = "HomieRL/homie_isaaclab"
+homie_rsl_rl = "HomieRL/rsl_rl/rsl_rl"

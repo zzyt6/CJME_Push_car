@@ -1,0 +1,14 @@
+# Recorded local stack (2026-09-14). This is a constraints snapshot, not a
+# standalone installer. Isaac Lab packages come from E:/IsaacLab_601/source.
+isaacsim==6.0.1.0
+isaaclab==6.1.17
+isaaclab-physx==1.1.3
+isaaclab-assets==0.3.5
+isaaclab-tasks==1.10.9
+isaaclab-rl==0.5.7
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+numpy==2.3.1
+rsl-rl-lib==5.0.1
+tensorboard==2.21.0
+GitPython==3.1.58

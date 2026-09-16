@@ -1,0 +1,7 @@
+# Extra packages used by the HOMIE adapter, within an already installed Isaac
+# Sim 6.0.1 + Isaac Lab 3 environment. All are present in local RLisaac601.
+# Do NOT install HomieRL/requirements.txt into the Python 3.12 environment.
+# Keep PyTorch, CUDA, Isaac Sim and editable Isaac Lab owned by that environment.
+numpy==2.3.1
+tensorboard==2.21.0
+GitPython==3.1.58
