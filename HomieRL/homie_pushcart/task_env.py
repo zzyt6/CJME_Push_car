@@ -1,0 +1,637 @@
+"""Stage-one push-cart RL environment: a high-level correction / scheduling policy over the frozen HOMIE.
+
+``PushCartEnv`` extends ``PushCartSimEnv`` (scene, preset pose, cart) with
+
+* an 18-dim high-level action: 3 residuals on the HOMIE velocity command (low-passed, clipped to HOMIE's
+  training ranges) and 15 upper-body joint corrections on top of the grasp pose (slew-limited, range opened
+  by the curriculum);
+* the frozen HOMIE policy run inside ``step`` (50 Hz, same rate as the high-level policy);
+* asymmetric observations (actor: proprioception + cart pose with noise/delay + deployable load proxies +
+  the cart's total mass; critic: plus cart velocity, grasp wrench, cart dynamics parameters, level);
+* interaction-centred rewards, push/pull-aware terminations, a grasp-invariant reset with whole-system
+  pose randomisation, cart dynamics randomisation and a fine-grained multi-scale curriculum.
+
+HOMIE's reward / termination / reset machinery (``HomieTaskCore``) is reused: our ``_reward_*`` methods
+are installed through ``cfg.rewards.scales`` and ``check_termination`` / ``reset_idx`` are extended.
+"""
+from __future__ import annotations
+
+import math
+from pathlib import Path
+from types import SimpleNamespace
+
+import torch
+import warp as wp
+
+from homie_isaaclab.math_utils import euler_from_quaternion, quat_apply, quat_mul, quat_rotate_inverse, torch_rand_float
+
+from .curriculum import CurriculumTracker, LevelParams
+from .lowlevel import HimLowLevelPolicy, frozen_checkpoint
+from .paths import HOMIE_JOINTS, HOMIE_RUN_DIR, ROOT
+from .sim_env import PushCartSimEnv
+from .task_config import HL_FRAME, PRIVILEGED_FRAME, PushCartTaskCfg, num_actor_obs, num_critic_obs
+
+UPPER_JOINTS = HOMIE_JOINTS[12:]
+WRIST_IDS = [i for i, n in enumerate(UPPER_JOINTS) if "wrist_pitch" in n or "wrist_yaw" in n]
+TERMINATION_REASONS = ("fall", "grasp_overload", "cart_yaw", "cart_distance", "cart_tilt", "wheel_lift", "blowup")
+
+
+def configure_homie_cfg(cfg, task_cfg: PushCartTaskCfg):
+    """Turn a G1RoughCfg into the push-cart low-level profile: our rewards, no HOMIE curricula, no leg jitter."""
+    cfg.env.episode_length_s = task_cfg.env.episode_length_s
+    cfg.env.action_curriculum = False
+    cfg.commands.curriculum = False
+    cfg.commands.resampling_time = 1.0e6          # commands come from the high-level policy every step
+    cfg.rewards.scales = task_cfg.rewards.scales
+    cfg.rewards.only_positive_rewards = False
+    cfg.domain_rand.randomize_initial_joint_pos = False   # legs must stay at the calibrated stance
+    cfg.domain_rand.push_robots = False                   # opened by the curriculum
+    return cfg
+
+
+def wrap_angle(a: torch.Tensor) -> torch.Tensor:
+    return torch.atan2(torch.sin(a), torch.cos(a))
+
+
+class PushCartEnv(PushCartSimEnv):
+    def __init__(self, cfg, task_cfg: PushCartTaskCfg, project_root: Path = ROOT, device="cuda:0", headless=True, *,
+                 checkpoint: Path | None = None, sim_context=None, level: int | None = None, cart_params=None,
+                 allow_robot_cart_contact=False):
+        self.task_cfg = task_cfg
+        configure_homie_cfg(cfg, task_cfg)
+        super().__init__(cfg, project_root, device, headless, with_cart=True, sim_context=sim_context,
+                         cart_params=cart_params, allow_robot_cart_contact=allow_robot_cart_contact)
+        self.policy = HimLowLevelPolicy(Path(checkpoint) if checkpoint else frozen_checkpoint(), device)
+        self.curriculum = CurriculumTracker(task_cfg, level)
+        self.num_hl_actions = task_cfg.env.num_hl_actions
+        self.num_hl_obs = num_actor_obs(task_cfg)
+        self.num_hl_critic_obs = num_critic_obs(task_cfg)
+        self._init_task_constants()
+        self._init_hl_buffers()
+        self._apply_level(self.curriculum.params)
+        print(f"[pushcart-env] high-level actor obs {self.num_hl_obs} ({HL_FRAME} x {task_cfg.env.actor_history}), "
+              f"critic obs {self.num_hl_critic_obs}, actions {self.num_hl_actions}, level {self.curriculum.level}; "
+              f"HOMIE {self.policy.checkpoint.name}", flush=True)
+
+    # ------------------------------------------------------------------ set-up
+    def _init_task_constants(self):
+        tc, dev, N = self.task_cfg, self.device, self.num_envs
+        self.residual_scale = torch.tensor(tc.actions.cmd_residual_scale, device=dev)
+        lim = torch.tensor(tc.actions.homie_cmd_limits, device=dev)
+        self.cmd_lo, self.cmd_hi = lim[:, 0], lim[:, 1]
+        self.cmd_alpha = min(1.0, self.dt / tc.actions.cmd_filter_tau_s) if tc.actions.cmd_filter_tau_s > 0 else 1.0
+        self.upper_lo = self.hard_dof_pos_limits[12:, 0].unsqueeze(0)
+        self.upper_hi = self.hard_dof_pos_limits[12:, 1].unsqueeze(0)
+        self.hold_target_q = self.preset_dof_pos[:, 12:] + self.upper_hold_offset          # (1, 15)
+        self.upper_range = (self.upper_hi - self.upper_lo)
+        self.wrist_ids = torch.tensor(WRIST_IDS, device=dev, dtype=torch.long)
+        # cart geometry
+        derived = self.cart_params["derived"]
+        yaw0 = float(derived["base_yaw"])
+        d = torch.tensor(derived["bar_center_world"], dtype=torch.float32) - torch.tensor(derived["base_pos_world"], dtype=torch.float32)
+        c, s = math.cos(-yaw0), math.sin(-yaw0)
+        self.bar_local = torch.tensor([c * d[0] - s * d[1], s * d[0] + c * d[1], d[2]], device=dev)
+        self.wheel_radius = float(self.cart_params["wheels"]["radius"])
+        self.cart_base_kg = float(self.cart_params["mass"]["base_kg"])
+        names = list(self.cart.body_names)
+        self.cart_base_body = names.index("base_link")
+        self.wheel_body_ids = torch.tensor([i for i, n in enumerate(names) if n.startswith("wheel_")], device=dev, dtype=torch.long)
+        # the two casters on the handle side (negative cart x) are the ones the feet can reach
+        positions = self.cart_params["wheels"]["positions_xy"]
+        near = [i for i, (x, _) in enumerate(positions) if x < 0]
+        self.near_caster_body_ids = torch.tensor([names.index(f"caster_{i}_swivel") for i in near], device=dev, dtype=torch.long)
+        swivel, _ = self.cart.find_joints("caster_.*_swivel_joint")
+        wheels, _ = self.cart.find_joints("wheel_.*_joint")
+        self.swivel_joint_ids = torch.tensor(swivel, device=dev, dtype=torch.long)
+        self.wheel_joint_ids = torch.tensor(wheels, device=dev, dtype=torch.long)
+        self.wheel_joint_ids_sim = self.wheel_joint_ids.to(torch.int32)      # Isaac Lab's write_*_index kernels need int32
+        self.cart_all_joint_ids = torch.arange(self.cart.num_joints, device=dev, dtype=torch.int32)
+        self.cart_default_mass = self.cart.data.body_mass.torch.clone()
+        self.cart_default_inertia = self.cart.data.body_inertia.torch.clone()
+        self.cart_default_com = self.cart.data.body_com_pose_b.torch.clone()
+        self.grasp_base_thresholds = torch.tensor(
+            [tc.termination.pull_n, tc.termination.up_n, tc.termination.tangential_n, tc.termination.torque_nm], device=dev)
+        self.commands_scale3 = self.commands_scale                                          # [2, 2, 0.5]
+        self.level_max = tc.curriculum.num_levels - 1
+
+    def _init_hl_buffers(self):
+        dev, N, A, H = self.device, self.num_envs, self.task_cfg.env.num_hl_actions, self.task_cfg.env.actor_history
+        z = lambda *shape, dtype=torch.float32: torch.zeros(*shape, device=dev, dtype=dtype)   # noqa: E731
+        self.cmd_task, self.cmd_homie, self.cmd_homie_prev = z(N, 3), z(N, 3), z(N, 3)
+        self.cmd_timer = z(N, dtype=torch.long)
+        self.hl_actions, self.hl_actions_prev, self.hl_actions_prev2, self.hl_action_raw_prev = z(N, A), z(N, A), z(N, A), z(N, A)
+        self.hl_delay = z(N, dtype=torch.long)
+        self.upper_delta_q = z(N, 15)
+        self.vel_est = z(N, 3)
+        self.actor_hist = z(N, H, HL_FRAME)
+        self.hl_obs = z(N, H * HL_FRAME)
+        self.hl_critic_obs = z(N, H * HL_FRAME + PRIVILEGED_FRAME)
+        self.cart_pose_hist = z(N, 3, 4)
+        self.cart_pose_delay = z(N, dtype=torch.long)
+        self.force_c_prev = z(N, 2, 3)
+        self.overload_counter = z(N, dtype=torch.long)
+        self.wheel_lift_counter = z(N, dtype=torch.long)
+        self.cart_mass_total = torch.full((N,), self.cart_base_kg, device=dev)
+        self.payload_com = z(N, 2)
+        self.wheel_friction = torch.full((N,), float(self.cart_params["wheels"]["friction"]), device=dev)
+        self.wheel_damping = torch.full((N,), float(self.cart_params["wheels"]["wheel_damping"]), device=dev)
+        self.swivel_damping = torch.full((N,), float(self.cart_params["wheels"]["swivel_damping"]), device=dev)
+        self.grasp_jitter = torch.ones(N, device=dev)
+        self.stall_timer = z(N, dtype=torch.long)
+        self.stall_wheel = z(N, dtype=torch.long)
+        self.cart_push_timer = z(N, dtype=torch.long)
+        self.push_force = z(N, 1, 3)                                  # pelvis force pulse (world frame)
+        self.push_timer = z(N, dtype=torch.long)
+        self.last_push_step = -10 ** 9
+        self.pelvis_body_id = torch.tensor([self.robot.body_names.index("pelvis")], device=dev, dtype=torch.long)
+        self.terminated_buf = z(N, dtype=torch.bool)             # HOMIE creates it in check_termination; reset() runs first
+        self.term_reason_buf = {name: z(N, dtype=torch.bool) for name in TERMINATION_REASONS}
+        self.term_counts = z(len(TERMINATION_REASONS) + 1)          # GPU accumulator, order: TERMINATION_REASONS + time_out
+        self.episodes_finished = 0
+        self._track_sum, self._fail_sum, self._count = z(()), z(()), z(())
+        self._next_curriculum_eval = 0
+        self.ts = SimpleNamespace()
+        self.level_tensor = z(())
+        # evaluation hooks (None = sample as usual): fixed task command, payload and caster heading
+        self.fixed_command = None
+        self.fixed_payload_kg = None
+        self.fixed_caster_angle = None
+
+    def _apply_level(self, params: LevelParams):
+        self.level_params = params
+        self.upper_scale = torch.tensor([params.waist_scale] + [params.arm_scale] * 14, device=self.device).unsqueeze(0)
+        self.cfg.domain_rand.push_robots = bool(params.robot_push and self.task_cfg.randomization.robot_push)
+        self.level_tensor.fill_(float(params.level))
+
+    # ------------------------------------------------------------------ public API
+    def reset(self):
+        self.reset_idx(torch.arange(self.num_envs, device=self.device))
+        self.compute_observations()
+        self._update_hl_observations()
+        return self.hl_obs, self.hl_critic_obs
+
+    def step(self, hl_actions: torch.Tensor):
+        tc = self.task_cfg
+        raw = hl_actions.to(self.device).clamp(-tc.actions.clip, tc.actions.clip)
+        applied = torch.where(self.hl_delay.unsqueeze(1) > 0, self.hl_action_raw_prev, raw)
+        self.hl_action_raw_prev.copy_(raw)
+        self.hl_actions_prev2.copy_(self.hl_actions_prev)
+        self.hl_actions_prev.copy_(self.hl_actions)
+        self.hl_actions.copy_(applied)
+        # task command schedule
+        self.cmd_timer -= 1
+        due = (self.cmd_timer <= 0).nonzero(as_tuple=False).flatten()
+        if len(due):
+            self._sample_task_command(due)
+        # HOMIE command = task command + residual, low-passed, clipped to the training ranges
+        target = (self.cmd_task + applied[:, :3] * self.residual_scale).clamp(self.cmd_lo, self.cmd_hi)
+        self.cmd_homie_prev.copy_(self.cmd_homie)
+        self.cmd_homie += self.cmd_alpha * (target - self.cmd_homie)
+        self.command_buffer.copy_(self.cmd_homie)
+        self.commands[:, :3] = self.cmd_homie
+        self.commands[:, 3] = 0.
+        self.commands[:, 4] = self.cfg.rewards.base_height_target
+        # HOMIE observes the command it is about to follow (its frame layout starts with the 3 scaled commands)
+        f = self.num_one_step_obs
+        self.obs_buf[:, -f:-f + 3] = self.commands[:, :3] * self.commands_scale
+        # upper-body correction: slew-limited, kept inside the hard joint limits
+        step_lim = tc.actions.upper_rate_limit_rad_s * self.dt
+        delta_target = applied[:, 3:] * self.upper_scale
+        delta = self.upper_delta_q + (delta_target - self.upper_delta_q).clamp(-step_lim, step_lim)
+        q_target = (self.hold_target_q + delta).clamp(self.upper_lo, self.upper_hi)
+        self.upper_delta_q = q_target - self.hold_target_q
+        self.upper_delta.copy_(self.upper_delta_q / self.cfg.control.action_scale)
+        # disturbances acting through the simulator
+        self._apply_robot_push()
+        self._apply_cart_disturbances()
+        # frozen low-level policy
+        leg_actions, vel_est = self.policy.act_and_estimate(self.obs_buf)
+        self.vel_est = vel_est / self.obs_scales.lin_vel
+        super().step(leg_actions)
+        self._update_hl_observations()
+        self.extras["time_outs"] = self.time_out_buf
+        return self.hl_obs, self.hl_critic_obs, self.rew_buf, self.reset_buf, self.extras
+
+    # ------------------------------------------------------------------ per-step task state
+    def _post_physics_step_callback(self):
+        super()._post_physics_step_callback()          # HOMIE: command hook (no-op here) + robot pushes per curriculum
+        self._compute_task_state()
+        self._update_persistence_counters()
+
+    def _compute_task_state(self):
+        ts, tc, N = self.ts, self.task_cfg, self.num_envs
+        cart_pos, cart_quat, cart_lin_w, cart_ang_w = self.cart_state()
+        _, _, cart_yaw = euler_from_quaternion(cart_quat)
+        ts.cart_yaw = cart_yaw.squeeze(1)
+        c, s = torch.cos(ts.cart_yaw), torch.sin(ts.cart_yaw)
+        ts.cart_v = torch.stack((c * cart_lin_w[:, 0] + s * cart_lin_w[:, 1], -s * cart_lin_w[:, 0] + c * cart_lin_w[:, 1]), -1)
+        ts.cart_speed = cart_lin_w[:, :2].norm(dim=-1)
+        ts.cart_wz = cart_ang_w[:, 2]
+        ts.cart_tilt = quat_rotate_inverse(cart_quat, self.gravity_vec)[:, :2].norm(dim=-1)
+        bar_w = cart_pos + quat_apply(cart_quat, self.bar_local.expand(N, -1))
+        rel = bar_w - self.root_states[:, :3]
+        ts.bar_b = quat_rotate_inverse(self.base_quat, rel)
+        ts.rel_yaw = wrap_angle(ts.cart_yaw - self.yaw.squeeze(1))
+        ts.dist = rel[:, :2].norm(dim=-1)
+        force_w, torque_w, _ = self.grasp_wrench()
+        valid = (self.episode_length_buf > 0).view(N, 1, 1).float()   # PhysX wrench is stale right after a reset
+        force_w, torque_w = force_w * valid, torque_w * valid
+        # raw magnitudes for the blow-up guard; everything downstream sees clipped forces so that one solver
+        # event cannot dominate an episode return
+        ts.force_norm_raw = force_w.norm(dim=-1)
+        clip = tc.rewards.force_clip_n
+        scale = (clip / ts.force_norm_raw.clamp_min(1e-6)).clamp_max(1.0).unsqueeze(-1)
+        ts.force_w = force_w * scale
+        ts.torque_w = torque_w * scale
+        cc, ss = c.view(N, 1), s.view(N, 1)
+        ts.force_c = torch.stack((cc * ts.force_w[..., 0] + ss * ts.force_w[..., 1],
+                                  -ss * ts.force_w[..., 0] + cc * ts.force_w[..., 1], ts.force_w[..., 2]), -1)
+        ts.torque_norm = ts.torque_w.norm(dim=-1)
+        ts.force_norm = ts.force_w.norm(dim=-1)
+        ts.budget = tc.rewards.force_budget_base_n + tc.rewards.force_budget_per_kg * self.cart_mass_total
+        wheel_z = self.cart.data.body_link_pose_w.torch[:, self.wheel_body_ids, 2]
+        ts.wheel_lift = (wheel_z - self.wheel_radius).clamp_min(0.)
+        ts.caster_angles = self.cart.data.joint_pos.torch[:, self.swivel_joint_ids]
+        ts.upper_tau = self.torques[:, 12:]
+        ts.feet_contact = self.contact_forces[:, self.feet_indices, 2] > 1.
+        # horizontal distance from each foot to the nearest handle-side caster (no physical contact in sim)
+        caster_xy = self.cart.data.body_link_pose_w.torch[:, self.near_caster_body_ids, :2]      # (N, 2, 2)
+        feet_xy = self.feet_pos[:, :, :2]                                                         # (N, 2, 2)
+        ts.feet_caster_dist = (feet_xy.unsqueeze(2) - caster_xy.unsqueeze(1)).norm(dim=-1).min(dim=2).values   # (N, 2)
+
+    def _grasp_thresholds(self):
+        tc = self.task_cfg.termination
+        thr = self.grasp_base_thresholds.unsqueeze(0) * self.level_params.grasp_threshold_mult * self.grasp_jitter.unsqueeze(1)
+        extra = tc.per_kg_n * (self.cart_mass_total - self.cart_base_kg).clamp_min(0.).unsqueeze(1)
+        thr = thr.clone()
+        thr[:, :3] += extra
+        return thr
+
+    def _update_persistence_counters(self):
+        ts, tc = self.ts, self.task_cfg.termination
+        thr = self._grasp_thresholds()
+        pull = (-ts.force_c[..., 0]).clamp_min(0.).max(dim=1).values
+        up = ts.force_c[..., 2].clamp_min(0.).max(dim=1).values
+        tangential = ts.force_c[..., 1].abs().max(dim=1).values
+        torque = ts.torque_norm.max(dim=1).values
+        over = (pull > thr[:, 0]) | (up > thr[:, 1]) | (tangential > thr[:, 2]) | (torque > thr[:, 3])
+        self.overload_counter = torch.where(over, self.overload_counter + 1, torch.zeros_like(self.overload_counter))
+        lifted = ts.wheel_lift.max(dim=1).values > tc.wheel_lift_m
+        self.wheel_lift_counter = torch.where(lifted, self.wheel_lift_counter + 1, torch.zeros_like(self.wheel_lift_counter))
+
+    # ------------------------------------------------------------------ terminations
+    def check_termination(self):
+        super().check_termination()            # torso contact + |g_xy| > 0.8 -> terminated_buf; time_out_buf
+        ts, tc = self.ts, self.task_cfg.termination
+        r = self.term_reason_buf
+        r["fall"] = self.terminated_buf.clone()
+        r["grasp_overload"] = self.overload_counter >= tc.persist_steps
+        r["cart_yaw"] = ts.rel_yaw.abs() > tc.yaw_diff_rad
+        r["cart_distance"] = (ts.dist < tc.distance_m[0]) | (ts.dist > tc.distance_m[1])
+        r["cart_tilt"] = ts.cart_tilt > math.sin(tc.cart_tilt_rad)
+        r["wheel_lift"] = self.wheel_lift_counter >= tc.wheel_lift_persist_steps
+        r["blowup"] = (ts.cart_speed > tc.blowup_cart_speed) | (ts.force_norm_raw.max(dim=1).values > tc.blowup_force_n)
+        terminated = r["fall"].clone()
+        for name in TERMINATION_REASONS[1:]:
+            terminated |= r[name]
+        self.terminated_buf = terminated
+        self.reset_buf = terminated | self.time_out_buf
+
+    # ------------------------------------------------------------------ rewards (HOMIE machinery: scale x dt applied outside)
+    def _reward_track_cart_lin_vel(self):
+        err = torch.sum(torch.square(self.cmd_task[:, :2] - self.ts.cart_v), dim=1)
+        return torch.exp(-err / self.task_cfg.rewards.tracking_sigma)
+
+    def _reward_track_cart_ang_vel(self):
+        err = torch.square(self.cmd_task[:, 2] - self.ts.cart_wz)
+        return torch.exp(-err / self.task_cfg.rewards.tracking_sigma)
+
+    def _reward_stand_still(self):
+        zero = (self.cmd_task.norm(dim=1) < 0.05).float()
+        return zero * (self.ts.cart_speed + 0.5 * (~self.ts.feet_contact).float().sum(dim=1))
+
+    def _reward_force_budget(self):
+        excess = (self.ts.force_norm - self.ts.budget.unsqueeze(1)).clamp_min(0.)
+        return torch.sum(torch.square(excess), dim=1) / torch.square(self.ts.budget)
+
+    def _reward_force_waste(self):
+        f = self.ts.force_c
+        return torch.sum(torch.square(f[..., 2]) + torch.square(f[..., 1]), dim=1) / torch.square(self.ts.budget)
+
+    def _reward_force_rate(self):
+        rate = torch.sum(torch.square(self.ts.force_c - self.force_c_prev), dim=(1, 2)) / torch.square(self.ts.budget)
+        self.force_c_prev.copy_(self.ts.force_c)
+        return rate
+
+    def _reward_wrist_saturation(self):
+        rc = self.task_cfg.rewards
+        tau = self.ts.upper_tau[:, self.wrist_ids].abs()
+        return torch.sum(torch.square((tau - rc.wrist_saturation_frac * rc.wrist_tau_max_nm).clamp_min(0.)), dim=1)
+
+    def _reward_grasp_pull_up(self):
+        up = self.ts.force_c[..., 2].clamp_min(0.)
+        return torch.sum(torch.square((up - self.task_cfg.rewards.pull_up_free_n).clamp_min(0.)), dim=1) / 100.0 ** 2
+
+    def _reward_wheel_lift(self):
+        return torch.sum((self.ts.wheel_lift - self.task_cfg.rewards.wheel_lift_free_m).clamp_min(0.), dim=1)
+
+    def _reward_robot_cart_alignment(self):
+        return torch.square(self.ts.rel_yaw)
+
+    def _reward_robot_cart_distance(self):
+        lo, hi = self.task_cfg.rewards.distance_deadzone_m
+        d = self.ts.dist
+        return torch.square((lo - d).clamp_min(0.)) + torch.square((d - hi).clamp_min(0.))
+
+    def _reward_joint_limit_proximity(self):
+        margin = self.task_cfg.rewards.joint_limit_margin * self.upper_range
+        q = self.dof_pos[:, 12:]
+        lower = (self.upper_lo + margin - q).clamp_min(0.)
+        upper = (q - (self.upper_hi - margin)).clamp_min(0.)
+        return torch.sum((lower + upper) / margin, dim=1)
+
+    def _reward_feet_caster_proximity(self):
+        clear = self.task_cfg.rewards.feet_caster_clear_m
+        return torch.sum((clear - self.ts.feet_caster_dist).clamp_min(0.) / clear, dim=1)
+
+    def _reward_upper_torque(self):
+        return torch.sum(torch.square(self.ts.upper_tau), dim=1)
+
+    def _reward_hl_action_rate(self):
+        return torch.sum(torch.square(self.hl_actions - self.hl_actions_prev), dim=1)
+
+    def _reward_hl_smoothness(self):
+        return torch.sum(torch.square(self.hl_actions - 2 * self.hl_actions_prev + self.hl_actions_prev2), dim=1)
+
+    def _reward_homie_cmd_rate(self):
+        return torch.sum(torch.square(self.cmd_homie - self.cmd_homie_prev), dim=1)
+
+    def _reward_homie_cmd_residual(self):
+        return torch.sum(torch.square(self.cmd_homie - self.cmd_task), dim=1)
+
+    def _reward_termination(self):
+        # HOMIE multiplies every scale by dt; divide it back out so the scale is the penalty per event.
+        return self.terminated_buf.float() / self.dt
+
+    # ------------------------------------------------------------------ reset
+    def reset_idx(self, env_ids):
+        if len(env_ids) == 0:
+            return
+        env_ids = env_ids.to(device=self.device, dtype=torch.int32)
+        self._record_episode_stats(env_ids)
+        self._randomize_cart(env_ids)
+        self.command_buffer[env_ids] = 0.            # HOMIE starts the episode with a zero command
+        self.cmd_homie[env_ids] = 0.
+        self.cmd_homie_prev[env_ids] = 0.
+        self.upper_delta[env_ids] = 0.
+        super().reset_idx(env_ids)
+        self._reset_hl_state(env_ids)
+        self._sample_task_command(env_ids)
+        ep = self.extras.setdefault("episode", {})
+        ep["curriculum_level"] = self.level_tensor.clone()
+        lw = self.curriculum.last_window
+        ep["curriculum_tracking_window"] = torch.tensor(lw["tracking_frac"] if math.isfinite(lw["tracking_frac"]) else 0., device=self.device)
+        ep["curriculum_fail_window"] = torch.tensor(lw["fail_rate"] if math.isfinite(lw["fail_rate"]) else 0., device=self.device)
+        for name in TERMINATION_REASONS:
+            ep[f"term_{name}"] = self.term_reason_buf[name][env_ids].float().mean()
+        ep["term_time_out"] = self.time_out_buf[env_ids].float().mean()
+        ep["cart_mass_kg"] = self.cart_mass_total[env_ids].mean()
+        if hasattr(self.ts, "force_norm_raw"):                           # not yet computed at the very first reset
+            ep["grasp_force_max_N"] = self.ts.force_norm_raw.max()      # over all envs this step: spikes show up here
+            ep["feet_caster_min_dist_m"] = self.ts.feet_caster_dist.min()
+
+    def _record_episode_stats(self, env_ids):
+        """Episode-level statistics for the curriculum (GPU accumulators; the CPU sync happens every 50 steps)."""
+        env_ids = env_ids[self.episode_length_buf[env_ids] > 0]      # the very first reset is not an episode
+        if len(env_ids) == 0:
+            return
+        rs = self.reward_scales
+        w = rs.get("track_cart_lin_vel", 0.) + rs.get("track_cart_ang_vel", 0.)
+        length = self.episode_length_buf[env_ids].clamp_min(1).float()
+        if w > 0 and "track_cart_lin_vel" in self.episode_sums:
+            tracking = (self.episode_sums["track_cart_lin_vel"][env_ids] + self.episode_sums["track_cart_ang_vel"][env_ids]) / (length * w)
+            self._track_sum += tracking.sum()
+        failed = self.terminated_buf[env_ids]
+        self._fail_sum += failed.float().sum()
+        self._count += float(len(env_ids))
+        self.episodes_finished += len(env_ids)
+        self.term_counts += torch.stack([self.term_reason_buf[n][env_ids].float().sum() for n in TERMINATION_REASONS]
+                                        + [self.time_out_buf[env_ids].float().sum()])
+        interval = max(1, int(self.task_cfg.curriculum.eval_interval_s / self.dt))
+        if self.common_step_counter >= self._next_curriculum_eval and self._count.item() >= self.curriculum.window:
+            self._next_curriculum_eval = self.common_step_counter + interval
+            count = self._count.item()
+            tracking_mean = self._track_sum.item() / count
+            fail_rate = self._fail_sum.item() / count
+            before = self.curriculum.level
+            changed = self.curriculum.record_window(tracking_mean, fail_rate)
+            self._track_sum.zero_(); self._fail_sum.zero_(); self._count.zero_()
+            if changed:
+                self._apply_level(self.curriculum.params)
+                print(f"[pushcart-env] curriculum {before} -> {self.curriculum.level} "
+                      f"({int(count)} episodes: tracking {tracking_mean:.3f}, fail rate {fail_rate:.3f})", flush=True)
+
+    def _randomize_cart(self, env_ids):
+        n, lp, rz, dev = len(env_ids), self.level_params, self.task_cfg.randomization, self.device
+        payload = torch_rand_float(0., lp.payload_max_kg, (n, 1), dev)
+        if self.fixed_payload_kg is not None:
+            payload = torch.full((n, 1), float(self.fixed_payload_kg), device=dev)
+        total = self.cart_base_kg + payload[:, 0]
+        self.cart_mass_total[env_ids] = total
+        com_xy = torch_rand_float(-rz.payload_com_offset_m, rz.payload_com_offset_m, (n, 2), dev)
+        self.payload_com[env_ids] = com_xy
+        masses = self.cart_default_mass[env_ids].clone()
+        masses[:, self.cart_base_body] = total
+        self.cart.set_masses_index(masses=masses, env_ids=env_ids)
+        inertias = self.cart_default_inertia[env_ids].clone()
+        inertias[:, self.cart_base_body] *= (total / self.cart_base_kg).view(n, *([1] * (inertias.ndim - 2)))
+        self.cart.set_inertias_index(inertias=inertias, env_ids=env_ids)
+        coms = self.cart_default_com[env_ids].clone()
+        coms[:, self.cart_base_body, :2] += (payload / total.unsqueeze(1)) * com_xy
+        self.cart.set_coms_index(coms=coms, env_ids=env_ids)
+        wd = torch_rand_float(*rz.wheel_damping_range, (n, 1), dev)
+        sd = torch_rand_float(*rz.swivel_damping_range, (n, 1), dev)
+        self.wheel_damping[env_ids], self.swivel_damping[env_ids] = wd[:, 0], sd[:, 0]
+        damping = torch.zeros(n, self.cart.num_joints, device=dev)
+        damping[:, self.wheel_joint_ids] = wd
+        damping[:, self.swivel_joint_ids] = sd
+        self.cart.write_joint_damping_to_sim_index(damping=damping, env_ids=env_ids)
+        mu = torch_rand_float(*rz.wheel_friction_range, (n, 1), dev)
+        self.wheel_friction[env_ids] = mu[:, 0]
+        ids_cpu = env_ids.to(device="cpu", dtype=torch.int32)
+        materials = wp.to_torch(self.cart.root_view.get_material_properties())
+        materials[ids_cpu, :, :2] = mu.cpu().to(materials.dtype).view(n, 1, 1)
+        self.cart.root_view.set_material_properties(wp.from_torch(materials), wp.from_torch(ids_cpu))
+        self.grasp_jitter[env_ids] = torch_rand_float(1. - rz.grasp_threshold_jitter, 1. + rz.grasp_threshold_jitter, (n,), dev)
+
+    def _reset_root_states(self, env_ids):
+        """Robot and cart move as one rigid system (grasp constraint stays satisfied); casters get random headings."""
+        n, rz, dev = len(env_ids), self.task_cfg.randomization, self.device
+        yaw = torch_rand_float(-math.pi, math.pi, (n, 1), dev) if rz.init_yaw else torch.zeros(n, 1, device=dev)
+        xy = torch_rand_float(-rz.init_xy_m, rz.init_xy_m, (n, 2), dev)
+        q_yaw = torch.cat((torch.zeros(n, 2, device=dev), torch.sin(yaw / 2), torch.cos(yaw / 2)), -1)
+        for asset in (self.robot, self.cart):
+            pose = asset.data.default_root_pose.torch[env_ids].clone()
+            pos = quat_apply(q_yaw, pose[:, :3])
+            pos[:, :2] += xy
+            pos += self.env_origins[env_ids]
+            quat = quat_mul(q_yaw, pose[:, 3:7])
+            asset.write_root_pose_to_sim_index(root_pose=torch.cat((pos, quat), -1), env_ids=env_ids)
+            asset.write_root_velocity_to_sim_index(root_velocity=torch.zeros(n, 6, device=dev), env_ids=env_ids)
+        joints = torch.zeros(n, self.cart.num_joints, device=dev)
+        r = self.level_params.caster_angle_range
+        if self.fixed_caster_angle is not None:
+            joints[:, self.swivel_joint_ids] = float(self.fixed_caster_angle)
+        elif r > 0:
+            joints[:, self.swivel_joint_ids] = torch_rand_float(-r, r, (n, len(self.swivel_joint_ids)), dev)
+        self.cart.write_joint_position_to_sim_index(position=joints, joint_ids=self.cart_all_joint_ids, env_ids=env_ids)
+        self.cart.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(joints), joint_ids=self.cart_all_joint_ids, env_ids=env_ids)
+
+    def _reset_hl_state(self, env_ids):
+        lp, tc, dev, n = self.level_params, self.task_cfg, self.device, len(env_ids)
+        for buf in (self.hl_actions, self.hl_actions_prev, self.hl_actions_prev2, self.hl_action_raw_prev,
+                    self.upper_delta_q, self.vel_est, self.actor_hist, self.cart_pose_hist, self.force_c_prev):
+            buf[env_ids] = 0.
+        self.overload_counter[env_ids] = 0
+        self.wheel_lift_counter[env_ids] = 0
+        self.stall_timer[env_ids] = 0
+        self.push_timer[env_ids] = 0
+        self.push_force[env_ids] = 0.
+        noise = lp.obs_noise_frac
+        self.cart_pose_delay[env_ids] = torch.randint(0, int(round(noise * tc.observations.cart_pose_delay_steps_max)) + 1, (n,), device=dev)
+        self.hl_delay[env_ids] = torch.randint(0, int(round(noise * tc.actions.delay_steps_max)) + 1, (n,), device=dev)
+        interval = int(tc.randomization.cart_push_interval_s / self.dt)
+        self.cart_push_timer[env_ids] = torch.randint(interval // 2, interval + 1, (n,), device=dev)
+
+    def _sample_task_command(self, env_ids):
+        lp, cc, dev, n = self.level_params, self.task_cfg.commands, self.device, len(env_ids)
+        if self.fixed_command is not None:
+            self.cmd_task[env_ids] = torch.tensor(self.fixed_command, device=dev, dtype=torch.float32)
+            self.cmd_timer[env_ids] = 10 ** 9
+            return
+        vx = torch_rand_float(lp.vx_range[0], lp.vx_range[1], (n, 1), dev)
+        vy = torch_rand_float(-lp.vy_max, lp.vy_max, (n, 1), dev)
+        wz = torch_rand_float(-lp.wz_max, lp.wz_max, (n, 1), dev)
+        keep = (torch.rand(n, 1, device=dev) >= cc.zero_prob).float()
+        self.cmd_task[env_ids] = torch.cat((vx, vy, wz), -1) * keep
+        lo, hi = int(cc.resample_time_s[0] / self.dt), int(cc.resample_time_s[1] / self.dt)
+        self.cmd_timer[env_ids] = torch.randint(lo, hi + 1, (n,), device=dev)
+
+    # ------------------------------------------------------------------ disturbances
+    def _push_robots(self):
+        """HOMIE's random push, delivered as a force pulse instead of a root-velocity jump.
+
+        Same schedule (``push_interval_s``) and momentum (robot mass x U[-max_push_vel_xy, +]) as HOMIE, spread
+        over ``robot_push_duration_s``; applied at the pelvis by ``_apply_robot_push`` before every step.
+        """
+        rz = self.task_cfg.randomization
+        if rz.robot_push_duration_s <= 0:                 # diagnostics: HOMIE's original root-velocity jump
+            self.last_push_step = self.common_step_counter
+            return super()._push_robots()
+        limit = self.cfg.domain_rand.max_push_vel_xy
+        steps = max(1, int(round(rz.robot_push_duration_s / self.dt)))
+        self.last_push_step = self.common_step_counter
+        dv = torch_rand_float(-limit, limit, (self.num_envs, 2), self.device)
+        mass = self.robot.data.body_mass.torch.sum(dim=1)
+        self.push_force.zero_()
+        self.push_force[:, 0, :2] = mass.unsqueeze(1) * dv / (steps * self.dt)
+        self.push_timer[:] = steps
+
+    def _apply_robot_push(self):
+        if not (self.push_timer > 0).any():
+            return
+        active = (self.push_timer > 0).view(self.num_envs, 1, 1).float()
+        self.robot.permanent_wrench_composer.set_forces_and_torques_index(
+            forces=self.push_force * active, body_ids=self.pelvis_body_id, is_global=True)
+        self.push_timer = (self.push_timer - 1).clamp_min(0)
+        if not (self.push_timer > 0).any():
+            self.robot.permanent_wrench_composer.reset()
+
+    def _apply_cart_disturbances(self):
+        frac = self.level_params.disturbance_frac
+        rz, dev, N = self.task_cfg.randomization, self.device, self.num_envs
+        if frac <= 0:
+            return
+        # planar velocity kick on the cart every ~cart_push_interval_s
+        self.cart_push_timer -= 1
+        kick = (self.cart_push_timer <= 0).nonzero(as_tuple=False).flatten()
+        if len(kick) and rz.cart_push_vel_max > 0:
+            vel = self.cart.data.root_com_vel_w.torch[kick].clone()
+            vel[:, :2] += torch_rand_float(-rz.cart_push_vel_max * frac, rz.cart_push_vel_max * frac, (len(kick), 2), dev)
+            self.cart.write_root_velocity_to_sim_index(root_velocity=vel, env_ids=kick.to(torch.int32))
+            interval = int(rz.cart_push_interval_s / self.dt)
+            self.cart_push_timer[kick] = torch.randint(int(interval * 0.8), int(interval * 1.2) + 1, (len(kick),), device=dev)
+        # single-wheel stall: multiply the stalled wheel's *joint damping* for a short time. The damping is part of
+        # PhysX's implicit joint drive and therefore unconditionally stable. (An earlier version applied the brake
+        # as an explicit effort target -tau = k * omega held over the 20 ms control step; for an airborne or
+        # slipping wheel, I = 7e-4 kg m^2, k * dt / I > 2 -> the wheel spin flipped sign and grew every step, and on
+        # touch-down the friction launched the cart: the 3.5 / 9.4 kN ... 1e5 N palm forces of the first training
+        # run. Attribution runs attr_A..H (4096 env x 30 iter, level 12): every variant with the brake on peaked at
+        # 1e5-8e5 N regardless of collision filter / solver iterations / push type; brake off -> 319 N. The damping
+        # version (attr_I) reproduces the brake-off numbers: max 320 N, 0 blow-ups.)
+        ending = (self.stall_timer == 1).nonzero(as_tuple=False).flatten()
+        if len(ending):
+            self.cart.write_joint_damping_to_sim_index(
+                damping=self.wheel_damping[ending].unsqueeze(1).expand(-1, 4).contiguous(),
+                joint_ids=self.wheel_joint_ids_sim, env_ids=ending.to(torch.int32))
+        self.stall_timer = (self.stall_timer - 1).clamp_min(0)
+        start = (self.stall_timer <= 0) & (torch.rand(N, device=dev) < rz.wheel_stall_prob_per_s * self.dt * frac)
+        if start.any():
+            ids = start.nonzero(as_tuple=False).flatten()
+            self.stall_timer[ids] = max(2, int(rz.wheel_stall_duration_s / self.dt))
+            self.stall_wheel[ids] = torch.randint(0, 4, (len(ids),), device=dev)
+            factor = 1.0 + (rz.wheel_stall_factor - 1.0) * frac
+            damping = self.wheel_damping[ids].unsqueeze(1).expand(-1, 4).clone()
+            damping[torch.arange(len(ids), device=dev), self.stall_wheel[ids]] *= factor
+            self.cart.write_joint_damping_to_sim_index(damping=damping, joint_ids=self.wheel_joint_ids_sim, env_ids=ids.to(torch.int32))
+
+    # ------------------------------------------------------------------ observations
+    def _update_hl_observations(self):
+        self._compute_task_state()
+        ts, tc, N, dev = self.ts, self.task_cfg, self.num_envs, self.device
+        lp = self.level_params
+        noise = lp.obs_noise_frac
+        f = self.num_one_step_obs
+        homie_frame = self.obs_buf[:, -f:]
+        task_cmd = self.cmd_task * self.commands_scale3
+        mass = ((self.cart_mass_total - tc.observations.cart_mass_norm[0]) / tc.observations.cart_mass_norm[1]).unsqueeze(1)
+        tau = ts.upper_tau * tc.observations.torque_scale
+        if noise > 0:
+            tau = tau * (1. + tc.observations.upper_torque_noise_frac * noise * (2 * torch.rand_like(tau) - 1))
+        est = self.vel_est + tc.observations.est_vel_noise_m_s * noise * (2 * torch.rand_like(self.vel_est) - 1)
+        est_scaled = est * self.obs_scales.lin_vel
+        diff = torch.stack((self.cmd_homie[:, 0] - est[:, 0], self.cmd_homie[:, 1] - est[:, 1],
+                            self.cmd_homie[:, 2] - self.base_ang_vel[:, 2]), -1) * self.commands_scale3
+        # cart pose relative to the base: true value into a 3-deep history, per-env delay, then noise
+        true_pose = torch.cat((ts.bar_b, ts.rel_yaw.unsqueeze(1)), -1)
+        fresh = (self.episode_length_buf == 0)
+        self.cart_pose_hist[:, 1:] = self.cart_pose_hist[:, :-1].clone()
+        self.cart_pose_hist[:, 0] = true_pose
+        self.cart_pose_hist[fresh] = true_pose[fresh].unsqueeze(1)
+        delayed = self.cart_pose_hist[torch.arange(N, device=dev), self.cart_pose_delay]
+        if noise > 0:
+            delayed = delayed + torch.cat((tc.observations.cart_pose_noise_pos_m * torch.randn(N, 3, device=dev),
+                                           tc.observations.cart_pose_noise_yaw_rad * torch.randn(N, 1, device=dev)), -1) * noise
+        scale = torch.full((N, 1), lp.arm_scale / tc.actions.arm_scale_range[1], device=dev)
+        frame = torch.cat((homie_frame, task_cmd, mass, tau, est_scaled, diff, delayed, self.hl_actions, scale), -1)
+        self.actor_hist[:, :-1] = self.actor_hist[:, 1:].clone()
+        self.actor_hist[:, -1] = frame
+        self.actor_hist[fresh, :-1] = 0.
+        self.hl_obs = self.actor_hist.reshape(N, -1).clamp(-self.cfg.normalization.clip_observations, self.cfg.normalization.clip_observations)
+        privileged = torch.cat((
+            ts.cart_v * self.obs_scales.lin_vel, (ts.cart_wz * self.obs_scales.ang_vel).unsqueeze(1),
+            ts.force_w.reshape(N, 6) / 100., ts.torque_w.reshape(N, 6) / 10.,
+            self.payload_com / max(tc.randomization.payload_com_offset_m, 1e-6),
+            self.wheel_friction.unsqueeze(1), (self.wheel_damping / tc.randomization.wheel_damping_range[1]).unsqueeze(1),
+            (self.swivel_damping / tc.randomization.swivel_damping_range[1]).unsqueeze(1),
+            torch.sin(ts.caster_angles), torch.cos(ts.caster_angles),
+            (self.level_tensor / max(self.level_max, 1)).expand(N).unsqueeze(1),
+            self.base_lin_vel * self.obs_scales.lin_vel,
+        ), -1)
+        self.hl_critic_obs = torch.cat((self.hl_obs, privileged), -1).clamp(-self.cfg.normalization.clip_observations, self.cfg.normalization.clip_observations)
+
+    # ------------------------------------------------------------------ diagnostics
+    def termination_summary(self) -> dict:
+        counts = dict(zip(TERMINATION_REASONS + ("time_out",), self.term_counts.tolist()))
+        total = max(1.0, sum(counts.values()))
+        return {"episodes": self.episodes_finished, "fractions": {k: v / total for k, v in counts.items()}, "counts": counts}
