@@ -1,0 +1,232 @@
+"""Optional live view of a benchmark run: MuJoCo scene, reference path, goal, lookahead point, trail, telemetry."""
+from __future__ import annotations
+
+from collections import deque
+import math
+import time
+
+import numpy as np
+
+
+class BenchViewer:
+    def __init__(self, port: int = 8080, speed: float = 1.0, render_hz: float = 25.0):
+        import viser
+        from homie_pushcart.mujoco_teleop import MujocoViserRenderer
+        self._Renderer = MujocoViserRenderer
+        self.server = viser.ViserServer(port=port, label="push-cart benchmark")
+        self.renderer, self._model_id = None, None
+        self.render_hz = render_hz
+        self.trail = deque(maxlen=8000)
+        self.hist = {k: deque(maxlen=500) for k in ("t", "cmd_vx", "vx", "cmd_wz", "wz", "ct", "fl", "fr")}
+        gui = self.server.gui
+        self.title = gui.add_markdown("### 推车控制对比实验")
+        self.status = gui.add_markdown("")
+        with gui.add_folder("运行"):
+            self.dd_path = gui.add_dropdown("路径", ["s_large"], initial_value="s_large")
+            self.dd_pol = gui.add_dropdown("策略", ["passthrough"], initial_value="passthrough")
+            self.sl_vnom = gui.add_slider("指定巡线速度 vx [m/s]", 0.15, 0.90, 0.05, 0.50)
+            self.sl_payload = gui.add_slider("载荷 [kg]", 0.0, 50.0, 0.5, 5.0)
+            self.cb_cruise = gui.add_checkbox("保持指定速度 (弯道不减速)", True)
+            self.btn_start = gui.add_button("开始", color="green")
+            self.btn_start.on_click(lambda _: setattr(self, "want_rerun", True))
+        with gui.add_folder("显示"):
+            self.follow = gui.add_checkbox("镜头跟随", True)
+            self.speed = gui.add_slider("播放倍率 (1 = 实时, 0 = 不限速)", 0.0, 4.0, 0.1, speed)
+        with gui.add_folder("曲线 (最近 10 s)"):
+            self.plot_v = gui.add_plotly(self._figure("vx", []), aspect=2.2)
+            self.plot_w = gui.add_plotly(self._figure("wz", []), aspect=2.2)
+            self.plot_e = gui.add_plotly(self._figure("横向误差 / 抓握力", []), aspect=2.2)
+        with gui.add_folder("已完成的运行", expand_by_default=False):
+            self.results_md = gui.add_markdown("_尚无_")
+        self.results_rows = []
+        self.camera_offset = np.array([-4.0, -5.0, 2.8])
+        self.want_rerun = False
+        self._k_curv0 = 0.6
+        self._vmin0 = 0.35
+        self._la_max0 = 1.0
+        self._steps = 0
+        self._last_plot = 0.0
+        self._next_tick = time.perf_counter()
+        self._goal = None
+        self._path_handle = self._goal_handle = self._la_handle = self._trail_handle = None
+        self._path_handles = []
+        print(f"[bench-view] viser: http://localhost:{self.server.get_port()}", flush=True)
+
+    def setup_live(self, path_names, policy_names, payload: float = 5.0, v_nom: float = 0.5, cruise: bool = True,
+                   follower_defaults=None):
+        """Fill the live-run dropdowns / sliders used by ``--view`` path following."""
+        self.dd_path.options = list(path_names)
+        self.dd_path.value = path_names[0]
+        self.dd_pol.options = list(policy_names)
+        self.dd_pol.value = policy_names[0]
+        self.sl_payload.value = float(payload)
+        self.sl_vnom.value = float(v_nom)
+        self.cb_cruise.value = bool(cruise)
+        if follower_defaults:
+            self._k_curv0 = float(follower_defaults.get("k_curv", 0.6))
+            self._vmin0 = float(follower_defaults.get("v_min_frac", 0.35))
+            self._la_max0 = float(follower_defaults.get("lookahead_max", 1.0))
+
+    def sync_follower(self, fcfg, path_length: float | None = None):
+        """Push the current GUI speed / cruise flags onto the live follower config (each sim step)."""
+        fcfg.v_nom = float(self.sl_vnom.value)
+        fcfg.cruise = bool(self.cb_cruise.value)
+        if fcfg.cruise:
+            fcfg.k_curv = 0.0
+            fcfg.v_min_frac = 1.0
+            fcfg.lookahead_max = max(self._la_max0, 1.8)
+        else:
+            fcfg.k_curv = self._k_curv0
+            fcfg.v_min_frac = self._vmin0
+            fcfg.lookahead_max = self._la_max0
+        if path_length is not None:
+            fcfg.timeout_s = max(60.0, 2.5 * float(path_length) / max(fcfg.v_nom, 0.15) + 20.0)
+
+    @staticmethod
+    def _figure(title, traces):
+        import plotly.graph_objects as go
+        fig = go.Figure()
+        for name, x, y, dash in traces:
+            fig.add_trace(go.Scatter(x=list(x), y=list(y), mode="lines", name=name, line=dict(dash=dash, width=1.6)))
+        fig.update_layout(title=dict(text=title, font=dict(size=13), x=0.02, y=0.97), margin=dict(l=40, r=10, t=28, b=28),
+                          legend=dict(orientation="h", y=-0.25, font=dict(size=10)), template="plotly_white", height=230)
+        return fig
+
+    def _clear_path(self):
+        for h in list(self._path_handles) + ([self._path_handle] if self._path_handle is not None else []):
+            try:
+                h.remove()
+            except Exception:
+                h.visible = False
+        self._path_handles = []
+        self._path_handle = None
+
+    @staticmethod
+    def _draw_dashed_path(scene, xy, z: float = 0.03, dash: float = 0.28, gap: float = 0.18):
+        """Black dashed ground polyline (viser has no native dash style)."""
+        pts2 = np.asarray(xy, dtype=float)
+        if len(pts2) < 2:
+            return []
+        seg = np.linalg.norm(np.diff(pts2, axis=0), axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        length = float(cum[-1])
+        handles = []
+        t, i = 0.0, 0
+        while t < length - 1e-4:
+            t1 = min(t + dash, length)
+            ss = np.linspace(t, t1, max(3, int(round((t1 - t) / 0.06)) + 1))
+            xs = np.interp(ss, cum, pts2[:, 0])
+            ys = np.interp(ss, cum, pts2[:, 1])
+            pts = np.stack([xs, ys, np.full_like(xs, z)], axis=1)
+            handles.append(scene.add_spline_catmull_rom(
+                f"/bench/path/dash_{i}", pts, color=(8, 8, 8), line_width=4.5))
+            i += 1
+            t = t1 + gap
+        return handles
+
+    # ------------------------------------------------------------------ run lifecycle
+    def begin_run(self, path, policy, label: str):
+        model = policy.env.model
+        if self.renderer is None or self._model_id != id(model):
+            self.renderer = self._Renderer(self.server, model)
+            self._model_id = id(model)
+        self.renderer.update(policy.env.data)
+        self.trail.clear()
+        for h in self.hist.values():
+            h.clear()
+        self._steps = 0
+        self._next_tick = time.perf_counter()
+        self.title.content = f"### 推车控制对比实验\n{label} · 策略 **{policy.name}**"
+        scene = self.server.scene
+        self._clear_path()
+        if path is not None:
+            self._path_handles = self._draw_dashed_path(scene, path.xy)
+            gx, gy, _ = path.goal
+            self._goal_handle = scene.add_icosphere("/bench/goal", radius=0.12, color=(230, 60, 60), position=(gx, gy, 0.12))
+            self._la_handle = scene.add_icosphere("/bench/lookahead", radius=0.06, color=(60, 120, 255), position=(gx, gy, 0.06))
+            self._goal = (gx, gy)
+        else:
+            for h in (self._goal_handle, self._la_handle):
+                if h is not None:
+                    h.visible = False
+            self._goal = None
+
+    def on_step(self, policy, follower, cmd, trace):
+        self._steps += 1
+        x, y, yaw = policy.pose()
+        vel = policy.velocity()
+        tel = trace.telemetry[-1] if trace.telemetry else {}
+        h = self.hist
+        h["t"].append(trace.t[-1]); h["cmd_vx"].append(cmd[0]); h["vx"].append(vel[0]); h["cmd_wz"].append(cmd[2]); h["wz"].append(vel[2])
+        h["ct"].append(follower.state.cross_track if follower is not None else 0.0)
+        h["fl"].append(tel.get("grasp_left", float("nan"))); h["fr"].append(tel.get("grasp_right", float("nan")))
+        every = max(1, int(round((1 / policy.dt) / self.render_hz)))
+        if self._steps % every == 0:
+            self.renderer.update(policy.env.data)
+            self.trail.append((x, y, 0.03))
+            if len(self.trail) >= 2:
+                self._trail_handle = self.server.scene.add_spline_catmull_rom("/bench/trail", np.asarray(self.trail)[-1500:],
+                                                                             color=(40, 200, 90), line_width=2.5)
+            if follower is not None and self._la_handle is not None:
+                lx, ly = follower.state.lookahead_xy
+                self._la_handle.position = (lx, ly, 0.06)
+            if self.follow.value:
+                target = np.array([x, y, 0.6])
+                for client in self.server.get_clients().values():
+                    with client.atomic():
+                        client.camera.look_at = target
+                        client.camera.position = target + self.camera_offset
+        now = time.perf_counter()
+        if now - self._last_plot >= 0.3:
+            self._last_plot = now
+            self._refresh(policy, follower, cmd, vel, tel, trace)
+        # pacing
+        if self.speed.value > 0.05:
+            self._next_tick += policy.dt / self.speed.value
+            sleep = self._next_tick - time.perf_counter()
+            if sleep > 0:
+                time.sleep(sleep)
+            elif sleep < -0.5:
+                self._next_tick = time.perf_counter()
+
+    def _refresh(self, policy, follower, cmd, vel, tel, trace):
+        lines = [f"- t = {trace.t[-1]:.1f} s · 命令 vx {cmd[0]:+.2f} vy {cmd[1]:+.2f} wz {cmd[2]:+.2f} · 实际 vx {vel[0]:+.2f} vy {vel[1]:+.2f} wz {vel[2]:+.2f}"]
+        if follower is not None:
+            st = follower.state
+            lines.append(f"- 进度 {st.s:.2f} / {follower.path.length:.2f} m · 横向误差 {st.cross_track:+.3f} m · 航向误差 {math.degrees(st.heading_err):+.1f}° · 距目标 {st.dist_goal:.2f} m"
+                         + (" · **已到达**" if st.reached else ""))
+        if "grasp_left" in tel:
+            lines.append(f"- 抓握力 左 {tel['grasp_left']:.0f} / 右 {tel['grasp_right']:.0f} N · 推 {tel['push_left']:+.0f}/{tel['push_right']:+.0f} · "
+                         f"侧 {tel['lat_left']:+.0f}/{tel['lat_right']:+.0f} · 竖 {tel['up_left']:+.0f}/{tel['up_right']:+.0f} N")
+            hc = tel.get("homie_cmd")
+            if hc is not None:
+                lines.append(f"- 上层→HOMIE 命令 {hc[0]:+.2f} {hc[1]:+.2f} {hc[2]:+.2f} · 上肢修正最大 {tel.get('upper_dq_max', 0):.2f} rad · 载荷 {tel.get('payload_kg', 0):.1f} kg")
+        if hasattr(self, "sl_vnom"):
+            live = "保持指定速度" if self.cb_cruise.value else "弯道可减速贴线"
+            lines.append(f"- 指定 vx {self.sl_vnom.value:.2f} m/s · {live} · 滑条载荷 {self.sl_payload.value:.1f} kg（改路径/策略/载荷后点「开始」）")
+        if trace.failure:
+            lines.append(f"- **失败: {trace.failure}**")
+        self.status.content = "\n".join(lines)
+        h = self.hist
+        t = list(h["t"])
+        if len(t) > 2:
+            self.plot_v.figure = self._figure("vx [m/s]: 命令 / 实际", [("命令", t, h["cmd_vx"], "dash"), ("实际", t, h["vx"], "solid")])
+            self.plot_w.figure = self._figure("wz [rad/s]: 命令 / 实际", [("命令", t, h["cmd_wz"], "dash"), ("实际", t, h["wz"], "solid")])
+            traces = [("横向误差 [m]", t, h["ct"], "solid")]
+            if np.isfinite(list(h["fl"])).any():
+                traces += [("|F| 左 /100 N", t, [v / 100 for v in h["fl"]], "dot"), ("|F| 右 /100 N", t, [v / 100 for v in h["fr"]], "dot")]
+            self.plot_e.figure = self._figure("横向误差 / 抓握力", traces)
+
+    def end_run(self, result: dict):
+        m = result["metrics"]
+        if result["kind"] == "path":
+            row = (f"| {result['label']} | {result['policy']['name']} | {'✓' if m.get('success') else (m.get('failure') or 'timeout')} | "
+                   f"{m.get('time_to_goal') if m.get('time_to_goal') is not None else '-'} | {m.get('final_pos_err', float('nan')):.3f} | "
+                   f"{m.get('cross_track_rms', float('nan')):.3f} | {m.get('cross_track_max', float('nan')):.3f} |")
+            header = ["| 运行 | 策略 | 结果 | 到点 s | 终点误差 m | 横向 RMS m | 横向 max m |", "|---|---|---|---|---|---|---|"]
+        else:
+            row = (f"| {result['label']} | {result['policy']['name']} | {m.get('signal')} | {m.get('rise_time')} | {m.get('settling_time')} | "
+                   f"{m.get('overshoot')} | {m.get('ss_error')} |")
+            header = ["| 运行 | 策略 | 信号 | 上升 s | 整定 s | 超调 | 稳态误差 |", "|---|---|---|---|---|---|---|"]
+        self.results_rows.append(row)
+        self.results_md.content = "\n".join(header + self.results_rows[-30:])

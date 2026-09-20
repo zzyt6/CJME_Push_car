@@ -1,10 +1,12 @@
 """MuJoCo sim2sim of the stage-one stack: high-level policy -> frozen HOMIE -> PD, mirroring ``PushCartEnv``.
 
-``MujocoHighLevelRunner`` reproduces the Isaac-side action pipeline (command residual + low-pass + clipping,
-slew-limited upper-body corrections inside the hard limits) and the 124-dim actor frame (HOMIE's own frame,
-task command, cart mass, upper torques, HIM velocity estimate, command-estimate difference, handle pose in
-the base frame, last action, correction scale) so a checkpoint trained in Isaac Lab can be evaluated or
-teleoperated in MuJoCo without any Isaac dependency. Observation noise / delay are off (clean sim2sim).
+``MujocoHighLevelRunner`` reproduces the Isaac-side action pipeline (first-order command reference, idle gate,
+command residual + low-pass + clipping, slew-limited upper-body corrections inside the hard limits) and the
+124-dim actor frame (HOMIE's own frame, task command reference, cart mass, upper torques, HIM velocity
+estimate, command-estimate difference, handle pose in the base frame, last action, correction scale) so a
+checkpoint trained in Isaac Lab can be evaluated or teleoperated in MuJoCo without any Isaac dependency.
+The task configuration comes from the checkpoint's own run (``task_cfg_from_run``), so checkpoints trained
+under different residual scales / clips / references keep their behaviour. Observation noise / delay are off.
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from .assets.mjcf_scene import CART_BODY
 from .curriculum import level_params
 from .mujoco_env import MujocoHomieEnv, quat_rotate_inverse_wxyz
 from .paths import HOMIE_RUN_DIR, ROOT
-from .task_config import HL_FRAME, PushCartTaskCfg, num_actor_obs, num_critic_obs
+from .task_config import HL_FRAME, PushCartTaskCfg, num_actor_obs, num_critic_obs, task_cfg_from_run
 
 
 def _yaw(quat_wxyz) -> float:
@@ -49,6 +51,9 @@ class MujocoHighLevelRunner:
         lim = np.array(tc.actions.homie_cmd_limits)
         self.cmd_lo, self.cmd_hi = lim[:, 0], lim[:, 1]
         self.cmd_alpha = min(1.0, self.dt / tc.actions.cmd_filter_tau_s) if tc.actions.cmd_filter_tau_s > 0 else 1.0
+        ref_tau = float(getattr(tc.commands, "ref_tau_s", 0.0))            # 0 (v2 runs): the reference is the raw command
+        self.ref_alpha = min(1.0, self.dt / ref_tau) if ref_tau > 0 else 1.0
+        self.gate_speed = float(getattr(tc.actions, "idle_gate_speed", 0.0))   # 0 (v2 runs): no idle gate
         self.set_level(level)
         self.step_lim = tc.actions.upper_rate_limit_rad_s * self.dt
         n_low = env.num_lower
@@ -90,6 +95,7 @@ class MujocoHighLevelRunner:
 
     def reset_buffers(self):
         self.cmd_task = np.zeros(3)
+        self.cmd_ref = np.zeros(3)
         self.cmd_homie = np.zeros(3)
         self.hl_actions = np.zeros(self.num_actions)
         self.upper_delta_q = np.zeros(15)
@@ -139,18 +145,20 @@ class MujocoHighLevelRunner:
     def step(self, cmd_task) -> tuple[np.ndarray, bool]:
         tc, env = self.task_cfg, self.env
         self.cmd_task = np.asarray(cmd_task, dtype=float)
+        self.cmd_ref = self.cmd_ref + self.ref_alpha * (self.cmd_task - self.cmd_ref)
+        gate = min(1.0, float(np.linalg.norm(self.cmd_ref)) / self.gate_speed) if self.gate_speed > 0 else 1.0
         if self.hl is not None:
             a = self.hl(torch.from_numpy(self.hl_obs).unsqueeze(0)).squeeze(0).cpu().numpy()
             a = np.clip(a, -tc.actions.clip, tc.actions.clip)
         else:
             a = np.zeros(self.num_actions)
         self.hl_actions = a
-        target = np.clip(self.cmd_task + a[:3] * self.residual_scale, self.cmd_lo, self.cmd_hi)
+        target = np.clip(self.cmd_ref + gate * a[:3] * self.residual_scale, self.cmd_lo, self.cmd_hi)
         self.cmd_homie = self.cmd_homie + self.cmd_alpha * (target - self.cmd_homie)
         env.set_command(*self.cmd_homie)
         # HOMIE observes the command it is about to follow (same in-place patch as the Isaac env)
         env.obs_hist[-1, :3] = env.commands[:3] * self.commands_scale
-        delta_target = a[3:] * self.upper_scale
+        delta_target = gate * a[3:] * self.upper_scale
         delta = self.upper_delta_q + np.clip(delta_target - self.upper_delta_q, -self.step_lim, self.step_lim)
         q_target = np.clip(self.hold_target_q + delta, self.upper_lo, self.upper_hi)
         self.upper_delta_q = q_target - self.hold_target_q
@@ -166,7 +174,7 @@ class MujocoHighLevelRunner:
     def _update_hl_obs(self, fresh: bool):
         env, tc, ts = self.env, self.task_cfg, self.ts
         homie_frame = env.obs_hist[-1]
-        task_cmd = self.cmd_task * self.commands_scale
+        task_cmd = self.cmd_ref * self.commands_scale
         mass = np.array([(self.cart_mass_total - tc.observations.cart_mass_norm[0]) / tc.observations.cart_mass_norm[1]])
         tau = ts["upper_tau"] * tc.observations.torque_scale
         est_scaled = self.vel_est * env.obs_scales["lin_vel"]
@@ -200,7 +208,8 @@ def make_runner(args):
     env = MujocoHomieEnv(with_cart=True)
     homie_ckpt = Path(args.homie_checkpoint) if getattr(args, "homie_checkpoint", None) else frozen_checkpoint()
     lowlevel = HimLowLevelPolicy(homie_ckpt, device="cpu")
-    task_cfg = PushCartTaskCfg()
+    checkpoint = getattr(args, "checkpoint", None)
+    task_cfg = task_cfg_from_run(checkpoint) if checkpoint else PushCartTaskCfg()
     hl = None
     if getattr(args, "checkpoint", None):
         hl = HighLevelPolicy(Path(args.checkpoint), num_actor_obs(task_cfg), num_critic_obs(task_cfg), task_cfg.env.num_hl_actions, "cpu")

@@ -187,7 +187,23 @@ class TaskConfigAndCurriculum(unittest.TestCase):
         self.assertEqual(num_critic_obs(cfg), num_actor_obs(cfg) + PRIVILEGED_FRAME)
         from homie_isaaclab.math_utils import class_to_dict
         scales = class_to_dict(cfg.rewards.scales)
-        self.assertGreater(scales["track_cart_lin_vel"], 0)
+        self.assertGreater(scales["track_cart_wz"], scales["track_cart_vx"])          # steering is the point of this layer
+        self.assertGreater(scales["track_cart_vx"], scales["track_cart_vy"])
+        self.assertGreater(scales["cart_yaw_lead"], 0)
+        self.assertGreater(scales["track_progress"], 0)                                 # standing still must not be near-optimal
+        self.assertNotIn("cart_smooth", scales)                                         # removed: caster contact jitter made it "do not roll"
+        self.assertLess(scales["hl_action_magnitude"], 0)
+        self.assertGreater(cfg.rewards.measure_filter_tau_s, 0)                         # rolling-contact ripple must not read as error
+        self.assertEqual(cfg.actions.cmd_residual_scale[:2], [0.4, 0.3])                # x / y residual untouched (v2)
+        self.assertGreaterEqual(cfg.actions.cmd_residual_scale[2], 0.5)                 # wz reaches HOMIE's 0.8 within |a| <= 1
+        self.assertEqual(cfg.actions.clip, 1.0)                                         # trim cannot invert the command; arms within design range
+        self.assertEqual(cfg.actions.arm_scale_range[0], cfg.actions.arm_scale_range[1])   # fixed correction scale
+        self.assertEqual(cfg.commands.wz_max, 0.4)                                      # HOMIE's loaded yaw ceiling (0.38-0.44)
+        self.assertEqual(cfg.commands.vy_max, 0.25)                                     # what the v2 two-stage policy reached
+        self.assertGreater(cfg.commands.ref_tau_s, 0)
+        self.assertGreater(cfg.actions.idle_gate_speed, 0)
+        self.assertEqual(len(cfg.curriculum.advance_tracking_frac), 3)
+        self.assertEqual(len(cfg.curriculum.advance_min_gain), 3)
         self.assertLess(scales["termination"], 0)
         self.assertFalse(cfg.env.enable_height_action)
         self.assertEqual(cfg.env.leg_residual_scale, 0.0)
@@ -202,9 +218,10 @@ class TaskConfigAndCurriculum(unittest.TestCase):
             self.assertLessEqual(p.vx_range[1], cfg.commands.vx_range_max[1])
             self.assertGreaterEqual(p.vx_range[0], cfg.commands.vx_range_max[0])
             self.assertLessEqual(p.wz_max, cfg.commands.wz_max)
-            self.assertLessEqual(p.arm_scale, cfg.actions.arm_scale_range[1])
+            self.assertAlmostEqual(p.arm_scale, cfg.actions.arm_scale_range[1])         # not opened by the curriculum any more
+            self.assertAlmostEqual(p.waist_scale, cfg.actions.waist_scale_range[1])
             self.assertLessEqual(p.payload_max_kg, 25.0)
-            self.assertGreaterEqual(p.grasp_threshold_mult, 1.0)
+            self.assertGreaterEqual(p.grasp_threshold_mult, 1.2)
             if prev is not None:
                 self.assertGreaterEqual(p.vx_range[1], prev.vx_range[1])
                 self.assertGreaterEqual(p.payload_max_kg, prev.payload_max_kg)
@@ -224,17 +241,38 @@ class TaskConfigAndCurriculum(unittest.TestCase):
         from homie_pushcart.task_config import PushCartTaskCfg
         cfg = PushCartTaskCfg()
         t = CurriculumTracker(cfg)
-        self.assertTrue(t.record_window(0.8, 0.0)); self.assertEqual(t.level, 1)
-        self.assertTrue(t.record_window(0.9, 0.0)); self.assertEqual(t.level, 2)
-        self.assertFalse(t.record_window(0.8, 0.2)); self.assertEqual(t.level, 2)      # fail rate too high: no promotion (1st miss)
-        self.assertTrue(t.record_window(0.5, 0.0)); self.assertEqual(t.level, 1)       # 2nd consecutive miss: demote
-        self.assertFalse(t.record_window(0.5, 0.0)); self.assertEqual(t.level, 1)      # counter restarted after the demotion
+        self.assertEqual(t.thresholds, [0.8, 0.8, 0.8])
+        self.assertEqual(t.min_gains, [0.7, 0.7, 0.7])
+        # the exp score alone is an absolute error: a cart that does not move scores 0.8 at low levels. The gain test
+        # catches it on the axes that were actually commanded (reference RMS >= 0.1), and is skipped on the others.
+        self.assertFalse(t.record_window(0.9, 0.0, gains=[0.05, 0.0, 0.0], cmd_rms=[0.15, 0.0, 0.0])); self.assertEqual(t.level, 0)
+        self.assertEqual(t.last_window["gain_checked"], [True, False, False])
+        self.assertTrue(t.record_window(0.9, 0.0, gains=[0.95, 0.0, 0.0], cmd_rms=[0.15, 0.0, 0.0])); self.assertEqual(t.level, 1)
+        self.assertFalse(t.record_window(0.9, 0.0, gains=[0.9, 0.9, 0.5], cmd_rms=[0.3, 0.2, 0.3])); self.assertEqual(t.level, 1)   # wz gain 0.5 < 0.7
+        self.assertTrue(t.record_window(0.9, 0.0, gains=[0.9, 0.75, 0.72], cmd_rms=[0.3, 0.2, 0.3])); self.assertEqual(t.level, 2)
+        t = CurriculumTracker(cfg)
+        self.assertTrue(t.record_window(0.9, 0.0)); self.assertEqual(t.level, 1)                  # scalar = every axis, no gain info
+        self.assertTrue(t.record_window([0.85, 0.82, 0.81], 0.0)); self.assertEqual(t.level, 2)   # each axis over its threshold
+        self.assertFalse(t.record_window([0.95, 0.95, 0.79], 0.0)); self.assertEqual(t.level, 2)  # wz alone short: no promotion (1st miss)
+        self.assertEqual(t.last_window["tracking_axes"], [0.95, 0.95, 0.79])
+        self.assertAlmostEqual(t.last_window["tracking_frac"], 0.79)
+        self.assertFalse(t.record_window(0.9, 0.2)); self.assertEqual(t.level, 2)                 # fail rate too high (2nd miss)
+        self.assertTrue(t.record_window(0.5, 0.0)); self.assertEqual(t.level, 1)                  # 3rd consecutive miss: demote
+        self.assertFalse(t.record_window(0.5, 0.0)); self.assertFalse(t.record_window(0.5, 0.0)); self.assertEqual(t.level, 1)   # counter restarted
         self.assertTrue(t.record_window(0.5, 0.0)); self.assertEqual(t.level, 0)
-        self.assertFalse(t.record_window(0.5, 0.0)); self.assertFalse(t.record_window(0.5, 0.0)); self.assertEqual(t.level, 0)   # floor
-        # per-episode interface reaches the same decision once a window is full
+        for _ in range(3):
+            t.record_window(0.5, 0.0)
+        self.assertEqual(t.level, 0)                                                              # floor
+        # per-episode interface reaches the same decision once a window is full (scalar or per-axis episodes)
         t2 = CurriculumTracker(cfg)
-        self.assertTrue(t2.record([0.9] * cfg.curriculum.window_episodes, [0] * cfg.curriculum.window_episodes))
+        n = cfg.curriculum.window_episodes
+        self.assertTrue(t2.record([[0.9, 0.8, 0.9]] * n, [0] * n))
         self.assertEqual(t2.level, 1)
+        self.assertFalse(t2.record([0.9] * (n - 1), [0] * (n - 1)))                              # window not full yet
+        self.assertTrue(t2.record([0.9], [0]))
+        self.assertEqual(t2.level, 2)
+        with self.assertRaises(ValueError):
+            t2.record_window([0.9, 0.9], 0.0)
 
 
 @unittest.skipIf(torch is None, "torch not available")
@@ -262,16 +300,59 @@ class MujocoHighLevelFrame(unittest.TestCase):
         slices = {item["name"]: slice(item["start"], item["start"] + item["dim"]) for item in frame_layout(cfg)}
         np.testing.assert_array_equal(frame[slices["homie_cmd"]].astype(np.float64).round(6),
                                       (runner.cmd_homie * runner.commands_scale).round(6))
-        np.testing.assert_allclose(frame[slices["task_cmd"]], np.array([0.3, 0.0, 0.1]) * runner.commands_scale, atol=1e-6)
+        # the observed task command is the first-order reference: still rising towards the 0.3 m/s step after 5 steps
+        np.testing.assert_allclose(frame[slices["task_cmd"]], runner.cmd_ref * runner.commands_scale, atol=1e-6)
+        expected = 0.3 * (1.0 - (1.0 - runner.dt / cfg.commands.ref_tau_s) ** 5)
+        self.assertAlmostEqual(float(runner.cmd_ref[0]), expected, places=6)
+        self.assertLess(float(runner.cmd_ref[0]), 0.3)
         self.assertAlmostEqual(float(frame[slices["cart_mass"]][0]), (12.0 - 12.0) / 25.0, places=6)
         np.testing.assert_array_equal(frame[slices["last_hl_action"]], np.zeros(18))     # passthrough
-        self.assertAlmostEqual(float(frame[slices["correction_scale"]][0]), 0.45 / 0.5, places=5)
+        self.assertAlmostEqual(float(frame[slices["correction_scale"]][0]), 1.0, places=5)   # fixed correction scale
         pose = frame[slices["handle_pose_in_base"]]
         self.assertGreater(pose[0], 0.25); self.assertLess(pose[0], 0.4)                # handle in front of the pelvis
         self.assertLess(abs(pose[3]), 0.1)                                              # cart and robot aligned
         # the whole history shifted by one frame per step
         obs2, _ = runner.step((0.3, 0.0, 0.1))
         np.testing.assert_array_equal(obs2[-2 * HL_FRAME:-HL_FRAME], obs[-HL_FRAME:])
+
+
+class TaskCfgFromRun(unittest.TestCase):
+    def test_checkpoint_keeps_the_config_it_was_trained_with(self):
+        import tempfile
+        import yaml
+        from homie_pushcart.task_config import PushCartTaskCfg, run_config_path, task_cfg_from_run
+        v2 = {"task": {"actions": {"clip": 1.0, "cmd_residual_scale": [0.4, 0.3, 0.4], "arm_scale_range": [0.15, 0.5],
+                                   "waist_scale_range": [0.1, 0.4]},
+                       "commands": {"vx_range_max": [-0.6, 0.9], "vy_max": 0.35, "wz_max": 0.6},
+                       "rewards": {"scales": {"track_cart_lin_vel": 2.0, "track_cart_ang_vel": 1.0}, "tracking_sigma": 0.25},
+                       "curriculum": {"advance_tracking_frac": 0.7, "window_episodes": 50}},
+              "viewer": {"eye": (7.5, 7.5, 7.5)}}
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "2026-09-17_21-25-55_b4"
+            (run / "params").mkdir(parents=True)
+            (run / "params" / "env.yaml").write_text(yaml.dump(v2), encoding="utf-8")
+            ckpt = run / "model_1800.pt"
+            ckpt.write_bytes(b"")
+            self.assertEqual(run_config_path(ckpt), run / "params" / "env.yaml")
+            cfg = task_cfg_from_run(ckpt, verbose=False)
+            self.assertEqual(cfg.actions.cmd_residual_scale, [0.4, 0.3, 0.4])           # v2 wz residual, not today's 0.5
+            self.assertEqual(cfg.actions.arm_scale_range, [0.15, 0.5])
+            self.assertEqual(cfg.rewards.tracking_sigma, 0.25)
+            self.assertEqual(cfg.curriculum.advance_tracking_frac, 0.7)
+            self.assertEqual(cfg.commands.ref_tau_s, 0.0)                                # legacy: no reference filter ...
+            self.assertEqual(cfg.actions.idle_gate_speed, 0.0)                           # ... and no idle gate
+            self.assertEqual(cfg.source_yaml, str(run / "params" / "env.yaml"))
+            self.assertEqual(cfg.actions.upper_rate_limit_rad_s, PushCartTaskCfg.actions.upper_rate_limit_rad_s)   # untouched keys keep defaults
+            from homie_pushcart.curriculum import level_params
+            self.assertAlmostEqual(level_params(6, cfg).arm_scale, 0.45)                 # v2 schedule reproduced for that run
+            # other instances are not affected (nested configs are per instance)
+            fresh = PushCartTaskCfg()
+            self.assertEqual(fresh.actions.cmd_residual_scale[2], 0.5)
+            self.assertEqual(fresh.rewards.tracking_sigma, 0.1)
+            self.assertGreater(fresh.commands.ref_tau_s, 0)
+            # no yaml -> current defaults
+            self.assertIsNone(run_config_path(Path(tmp) / "nowhere" / "model_1.pt"))
+            self.assertEqual(task_cfg_from_run(Path(tmp) / "nowhere" / "model_1.pt", verbose=False).rewards.tracking_sigma, 0.1)
 
 
 @unittest.skipIf(torch is None, "torch not available")

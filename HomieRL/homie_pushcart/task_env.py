@@ -3,8 +3,10 @@
 ``PushCartEnv`` extends ``PushCartSimEnv`` (scene, preset pose, cart) with
 
 * an 18-dim high-level action: 3 residuals on the HOMIE velocity command (low-passed, clipped to HOMIE's
-  training ranges) and 15 upper-body joint corrections on top of the grasp pose (slew-limited, range opened
-  by the curriculum);
+  training ranges) and 15 upper-body joint corrections on top of the grasp pose (slew-limited, fixed scale);
+  both fade out when the command reference is zero, so no command / a = 0 is exact HOMIE passthrough;
+* a first-order reference ``cmd_ref`` of the step task command: the achievable velocity curve the cart is
+  rewarded for following (and what the actor observes as its task command);
 * the frozen HOMIE policy run inside ``step`` (50 Hz, same rate as the high-level policy);
 * asymmetric observations (actor: proprioception + cart pose with noise/delay + deployable load proxies +
   the cart's total mass; critic: plus cart velocity, grasp wrench, cart dynamics parameters, level);
@@ -80,6 +82,9 @@ class PushCartEnv(PushCartSimEnv):
         lim = torch.tensor(tc.actions.homie_cmd_limits, device=dev)
         self.cmd_lo, self.cmd_hi = lim[:, 0], lim[:, 1]
         self.cmd_alpha = min(1.0, self.dt / tc.actions.cmd_filter_tau_s) if tc.actions.cmd_filter_tau_s > 0 else 1.0
+        self.ref_alpha = min(1.0, self.dt / tc.commands.ref_tau_s) if tc.commands.ref_tau_s > 0 else 1.0
+        tau_m = float(getattr(tc.rewards, "measure_filter_tau_s", 0.0))
+        self.meas_alpha = min(1.0, self.dt / tau_m) if tau_m > 0 else 1.0
         self.upper_lo = self.hard_dof_pos_limits[12:, 0].unsqueeze(0)
         self.upper_hi = self.hard_dof_pos_limits[12:, 1].unsqueeze(0)
         self.hold_target_q = self.preset_dof_pos[:, 12:] + self.upper_hold_offset          # (1, 15)
@@ -117,9 +122,18 @@ class PushCartEnv(PushCartSimEnv):
     def _init_hl_buffers(self):
         dev, N, A, H = self.device, self.num_envs, self.task_cfg.env.num_hl_actions, self.task_cfg.env.actor_history
         z = lambda *shape, dtype=torch.float32: torch.zeros(*shape, device=dev, dtype=dtype)   # noqa: E731
-        self.cmd_task, self.cmd_homie, self.cmd_homie_prev = z(N, 3), z(N, 3), z(N, 3)
+        self.cmd_task, self.cmd_ref = z(N, 3), z(N, 3)
+        self.cmd_ref_f, self.cart_vel_f, self.base_wz_f = z(N, 3), z(N, 3), z(N)   # low-passed reference / cart velocity / torso yaw rate (rewards)
+        self.cmd_homie, self.cmd_homie_prev = z(N, 3), z(N, 3)
         self.cmd_timer = z(N, dtype=torch.long)
         self.hl_actions, self.hl_actions_prev, self.hl_actions_prev2, self.hl_action_raw_prev = z(N, A), z(N, A), z(N, A), z(N, A)
+        self.hl_raw, self.hl_raw_prev, self.hl_raw_prev2 = z(N, A), z(N, A), z(N, A)      # unclipped policy output (regularisers)
+        self.overload_dir = z(N, 4, dtype=torch.bool)                   # pull / up / tangential / torque over threshold
+        # per-episode diagnostics, cleared with the episode
+        self.track_err2, self.track_steps = z(N, 3), z(N)
+        self.track_vr, self.track_rr = z(N, 3), z(N, 3)                 # sum v * ref, sum ref^2 (regression gain)
+        self.turn_dq_sum, self.turn_steps = z(N), z(N)
+        self.rel_yaw_abs_sum, self.sat_steps = z(N), z(N)
         self.hl_delay = z(N, dtype=torch.long)
         self.upper_delta_q = z(N, 15)
         self.vel_est = z(N, 3)
@@ -148,7 +162,8 @@ class PushCartEnv(PushCartSimEnv):
         self.term_reason_buf = {name: z(N, dtype=torch.bool) for name in TERMINATION_REASONS}
         self.term_counts = z(len(TERMINATION_REASONS) + 1)          # GPU accumulator, order: TERMINATION_REASONS + time_out
         self.episodes_finished = 0
-        self._track_sum, self._fail_sum, self._count = z(()), z(()), z(())
+        self._track_sum, self._fail_sum, self._count = z(3), z(()), z(())       # curriculum window: per-axis tracking
+        self._gain_vr, self._gain_rr, self._gain_steps = z(3), z(3), z(())      # ... and regression gain of v on the reference
         self._next_curriculum_eval = 0
         self.ts = SimpleNamespace()
         self.level_tensor = z(())
@@ -172,19 +187,26 @@ class PushCartEnv(PushCartSimEnv):
 
     def step(self, hl_actions: torch.Tensor):
         tc = self.task_cfg
-        raw = hl_actions.to(self.device).clamp(-tc.actions.clip, tc.actions.clip)
+        unclipped = hl_actions.to(self.device)
+        self.hl_raw_prev2.copy_(self.hl_raw_prev)
+        self.hl_raw_prev.copy_(self.hl_raw)
+        self.hl_raw.copy_(unclipped)
+        raw = unclipped.clamp(-tc.actions.clip, tc.actions.clip)
         applied = torch.where(self.hl_delay.unsqueeze(1) > 0, self.hl_action_raw_prev, raw)
         self.hl_action_raw_prev.copy_(raw)
         self.hl_actions_prev2.copy_(self.hl_actions_prev)
         self.hl_actions_prev.copy_(self.hl_actions)
         self.hl_actions.copy_(applied)
-        # task command schedule
+        # task command schedule; the cart is asked to follow the command's first-order response, not the step
         self.cmd_timer -= 1
         due = (self.cmd_timer <= 0).nonzero(as_tuple=False).flatten()
         if len(due):
             self._sample_task_command(due)
-        # HOMIE command = task command + residual, low-passed, clipped to the training ranges
-        target = (self.cmd_task + applied[:, :3] * self.residual_scale).clamp(self.cmd_lo, self.cmd_hi)
+        self.cmd_ref += self.ref_alpha * (self.cmd_task - self.cmd_ref)
+        # zero reference -> residual and arm correction fade to zero: a standing robot is exact HOMIE passthrough
+        gate = (self.cmd_ref.norm(dim=1, keepdim=True) / tc.actions.idle_gate_speed).clamp(0., 1.) if tc.actions.idle_gate_speed > 0 else 1.0
+        # HOMIE command = reference + residual, low-passed, clipped to the training ranges
+        target = (self.cmd_ref + gate * applied[:, :3] * self.residual_scale).clamp(self.cmd_lo, self.cmd_hi)
         self.cmd_homie_prev.copy_(self.cmd_homie)
         self.cmd_homie += self.cmd_alpha * (target - self.cmd_homie)
         self.command_buffer.copy_(self.cmd_homie)
@@ -196,7 +218,7 @@ class PushCartEnv(PushCartSimEnv):
         self.obs_buf[:, -f:-f + 3] = self.commands[:, :3] * self.commands_scale
         # upper-body correction: slew-limited, kept inside the hard joint limits
         step_lim = tc.actions.upper_rate_limit_rad_s * self.dt
-        delta_target = applied[:, 3:] * self.upper_scale
+        delta_target = gate * applied[:, 3:] * self.upper_scale
         delta = self.upper_delta_q + (delta_target - self.upper_delta_q).clamp(-step_lim, step_lim)
         q_target = (self.hold_target_q + delta).clamp(self.upper_lo, self.upper_hi)
         self.upper_delta_q = q_target - self.hold_target_q
@@ -216,7 +238,14 @@ class PushCartEnv(PushCartSimEnv):
     def _post_physics_step_callback(self):
         super()._post_physics_step_callback()          # HOMIE: command hook (no-op here) + robot pushes per curriculum
         self._compute_task_state()
+        # measurement filter for the tracking rewards (once per control step; the caster contact ripple of a rolling
+        # cart must not read as a tracking error, see task_config.rewards.measure_filter_tau_s)
+        vel = torch.cat((self.ts.cart_v, self.ts.cart_wz.unsqueeze(1)), -1)
+        self.cart_vel_f += self.meas_alpha * (vel - self.cart_vel_f)
+        self.cmd_ref_f += self.meas_alpha * (self.cmd_ref - self.cmd_ref_f)
+        self.base_wz_f += self.meas_alpha * (self.base_ang_vel[:, 2] - self.base_wz_f)
         self._update_persistence_counters()
+        self._accumulate_diagnostics()
 
     def _compute_task_state(self):
         ts, tc, N = self.ts, self.task_cfg, self.num_envs
@@ -274,10 +303,26 @@ class PushCartEnv(PushCartSimEnv):
         up = ts.force_c[..., 2].clamp_min(0.).max(dim=1).values
         tangential = ts.force_c[..., 1].abs().max(dim=1).values
         torque = ts.torque_norm.max(dim=1).values
-        over = (pull > thr[:, 0]) | (up > thr[:, 1]) | (tangential > thr[:, 2]) | (torque > thr[:, 3])
+        self.overload_dir = torch.stack((pull > thr[:, 0], up > thr[:, 1], tangential > thr[:, 2], torque > thr[:, 3]), -1)
+        over = self.overload_dir.any(dim=1)
         self.overload_counter = torch.where(over, self.overload_counter + 1, torch.zeros_like(self.overload_counter))
         lifted = ts.wheel_lift.max(dim=1).values > tc.wheel_lift_m
         self.wheel_lift_counter = torch.where(lifted, self.wheel_lift_counter + 1, torch.zeros_like(self.wheel_lift_counter))
+
+    def _accumulate_diagnostics(self):
+        """Per-episode statistics read out at reset: tracking RMSE against the reference, arm use while turning,
+        cart-robot yaw offset, action saturation. Once per control step (this callback runs once per step)."""
+        ts, tc = self.ts, self.task_cfg
+        err = self.cmd_ref_f - self.cart_vel_f                          # same filtered signals as the rewards
+        self.track_err2 += err * err
+        self.track_vr += self.cart_vel_f * self.cmd_ref_f
+        self.track_rr += self.cmd_ref_f * self.cmd_ref_f
+        self.track_steps += 1.
+        turning = (self.cmd_ref[:, 2].abs() > tc.rewards.turning_min_wz).float()
+        self.turn_dq_sum += turning * self.upper_delta_q.abs().mean(dim=1)
+        self.turn_steps += turning
+        self.rel_yaw_abs_sum += ts.rel_yaw.abs()
+        self.sat_steps += (self.hl_raw.abs() > 1.0).float().mean(dim=1)
 
     # ------------------------------------------------------------------ terminations
     def check_termination(self):
@@ -298,25 +343,54 @@ class PushCartEnv(PushCartSimEnv):
         self.reset_buf = terminated | self.time_out_buf
 
     # ------------------------------------------------------------------ rewards (HOMIE machinery: scale x dt applied outside)
-    def _reward_track_cart_lin_vel(self):
-        err = torch.sum(torch.square(self.cmd_task[:, :2] - self.ts.cart_v), dim=1)
+    # tracking: low-passed cart velocity against the equally low-passed reference (measure_filter_tau_s)
+    def _reward_track_cart_vx(self):
+        err = torch.square(self.cmd_ref_f[:, 0] - self.cart_vel_f[:, 0])
         return torch.exp(-err / self.task_cfg.rewards.tracking_sigma)
 
-    def _reward_track_cart_ang_vel(self):
-        err = torch.square(self.cmd_task[:, 2] - self.ts.cart_wz)
+    def _reward_track_cart_vy(self):
+        err = torch.square(self.cmd_ref_f[:, 1] - self.cart_vel_f[:, 1])
         return torch.exp(-err / self.task_cfg.rewards.tracking_sigma)
+
+    def _reward_track_cart_wz(self):
+        err = torch.square(self.cmd_ref_f[:, 2] - self.cart_vel_f[:, 2])
+        return torch.exp(-err / self.task_cfg.rewards.tracking_sigma)
+
+    def _reward_track_progress(self):
+        """Linear tracking score per commanded axis: 1 - |v - r| / |r|, clipped to [0, 1] (standing still = 0, on the
+        reference = 1, overshoot costs as much as undershoot). Complements the exp terms, which are flat for small
+        commands and let "do not move" score 0.9 at 0.1 m/s."""
+        rc = self.task_cfg.rewards
+        r, v = self.cmd_ref_f, self.cart_vel_f
+        active = (r.abs() >= rc.progress_min_cmd).float()
+        score = (1. - (v - r).abs() / r.abs().clamp_min(rc.progress_min_cmd)).clamp(0., 1.)
+        return (score * active).sum(dim=1) / active.sum(dim=1).clamp_min(1.)
+
+    def _reward_cart_yaw_lead(self):
+        """Cart yaw rate closer to the reference than the torso's. Only the arms can earn it (they rotate the cart
+        relative to the pelvis) and only in transients: in a steady turn both rates are equal, so it is zero."""
+        rc = self.task_cfg.rewards
+        ref = self.cmd_ref_f[:, 2]
+        e_torso = (ref - self.base_wz_f).abs()
+        e_cart = (ref - self.cart_vel_f[:, 2]).abs()
+        turning = (ref.abs() > rc.turning_min_wz).float()
+        return turning * (e_torso - e_cart).clamp(0., rc.cart_yaw_lead_cap)
 
     def _reward_stand_still(self):
-        zero = (self.cmd_task.norm(dim=1) < 0.05).float()
-        return zero * (self.ts.cart_speed + 0.5 * (~self.ts.feet_contact).float().sum(dim=1))
+        zero = (self.cmd_ref.norm(dim=1) < self.task_cfg.actions.idle_gate_speed).float()
+        return zero * (self.ts.cart_speed + 0.5 * self.ts.cart_wz.abs() + 0.5 * (~self.ts.feet_contact).float().sum(dim=1))
 
     def _reward_force_budget(self):
         excess = (self.ts.force_norm - self.ts.budget.unsqueeze(1)).clamp_min(0.)
         return torch.sum(torch.square(excess), dim=1) / torch.square(self.ts.budget)
 
     def _reward_force_waste(self):
+        """Force that cannot move the cart: vertical, and the two hands pulling the bar apart / squeezing it (the
+        along-bar component the fingers carry). Net lateral force steers and is left to the budget; differential
+        push / pull (the yaw moment) is free."""
         f = self.ts.force_c
-        return torch.sum(torch.square(f[..., 2]) + torch.square(f[..., 1]), dim=1) / torch.square(self.ts.budget)
+        along_bar = f[:, 0, 1] - f[:, 1, 1]
+        return (torch.sum(torch.square(f[..., 2]), dim=1) + 0.5 * torch.square(along_bar)) / torch.square(self.ts.budget)
 
     def _reward_force_rate(self):
         rate = torch.sum(torch.square(self.ts.force_c - self.force_c_prev), dim=(1, 2)) / torch.square(self.ts.budget)
@@ -336,7 +410,8 @@ class PushCartEnv(PushCartSimEnv):
         return torch.sum((self.ts.wheel_lift - self.task_cfg.rewards.wheel_lift_free_m).clamp_min(0.), dim=1)
 
     def _reward_robot_cart_alignment(self):
-        return torch.square(self.ts.rel_yaw)
+        excess = (self.ts.rel_yaw.abs() - self.task_cfg.rewards.alignment_deadzone_rad).clamp_min(0.)
+        return torch.square(excess)
 
     def _reward_robot_cart_distance(self):
         lo, hi = self.task_cfg.rewards.distance_deadzone_m
@@ -357,17 +432,22 @@ class PushCartEnv(PushCartSimEnv):
     def _reward_upper_torque(self):
         return torch.sum(torch.square(self.ts.upper_tau), dim=1)
 
+    # The three action regularisers act on the *unclipped* policy output. On the clipped action a mean parked
+    # outside the clip made every sample identical, so both rate terms were zero: that is how v2's arms froze.
     def _reward_hl_action_rate(self):
-        return torch.sum(torch.square(self.hl_actions - self.hl_actions_prev), dim=1)
+        return torch.sum(torch.square(self.hl_raw - self.hl_raw_prev), dim=1)
 
     def _reward_hl_smoothness(self):
-        return torch.sum(torch.square(self.hl_actions - 2 * self.hl_actions_prev + self.hl_actions_prev2), dim=1)
+        return torch.sum(torch.square(self.hl_raw - 2 * self.hl_raw_prev + self.hl_raw_prev2), dim=1)
+
+    def _reward_hl_action_magnitude(self):
+        return torch.sum(torch.square(self.hl_raw), dim=1)
 
     def _reward_homie_cmd_rate(self):
         return torch.sum(torch.square(self.cmd_homie - self.cmd_homie_prev), dim=1)
 
     def _reward_homie_cmd_residual(self):
-        return torch.sum(torch.square(self.cmd_homie - self.cmd_task), dim=1)
+        return torch.sum(torch.square(self.cmd_homie - self.cmd_ref), dim=1)
 
     def _reward_termination(self):
         # HOMIE multiplies every scale by dt; divide it back out so the scale is the penalty per event.
@@ -383,19 +463,44 @@ class PushCartEnv(PushCartSimEnv):
         self.command_buffer[env_ids] = 0.            # HOMIE starts the episode with a zero command
         self.cmd_homie[env_ids] = 0.
         self.cmd_homie_prev[env_ids] = 0.
+        self.cmd_ref[env_ids] = 0.                   # the reference ramps up from rest
+        self.cmd_ref_f[env_ids] = 0.
+        self.cart_vel_f[env_ids] = 0.
+        self.base_wz_f[env_ids] = 0.
         self.upper_delta[env_ids] = 0.
-        super().reset_idx(env_ids)
+        super().reset_idx(env_ids)                   # HOMIE rebuilds extras["episode"] in here ...
+        self._log_episode_diagnostics(env_ids)       # ... so the read-out comes after it and before the buffers are cleared
         self._reset_hl_state(env_ids)
         self._sample_task_command(env_ids)
+
+    def _log_episode_diagnostics(self, env_ids):
         ep = self.extras.setdefault("episode", {})
         ep["curriculum_level"] = self.level_tensor.clone()
         lw = self.curriculum.last_window
         ep["curriculum_tracking_window"] = torch.tensor(lw["tracking_frac"] if math.isfinite(lw["tracking_frac"]) else 0., device=self.device)
+        for axis, value in zip(("vx", "vy", "wz"), lw["tracking_axes"]):
+            ep[f"curriculum_tracking_{axis}"] = torch.tensor(value if math.isfinite(value) else 0., device=self.device)
         ep["curriculum_fail_window"] = torch.tensor(lw["fail_rate"] if math.isfinite(lw["fail_rate"]) else 0., device=self.device)
+        for axis, value in zip(("vx", "vy", "wz"), lw["gains"]):
+            ep[f"curriculum_gain_{axis}"] = torch.tensor(value if math.isfinite(value) else 0., device=self.device)
         for name in TERMINATION_REASONS:
             ep[f"term_{name}"] = self.term_reason_buf[name][env_ids].float().mean()
         ep["term_time_out"] = self.time_out_buf[env_ids].float().mean()
+        overload = self.term_reason_buf["grasp_overload"][env_ids]
+        for i, name in enumerate(("pull", "up", "tangential", "torque")):
+            ep[f"term_overload_{name}"] = (overload & self.overload_dir[env_ids, i]).float().mean()
         ep["cart_mass_kg"] = self.cart_mass_total[env_ids].mean()
+        # tracking RMSE against the reference (m/s, m/s, rad/s) and how the actions were used, per finished episode
+        steps = self.track_steps[env_ids].clamp_min(1.)
+        rmse = torch.sqrt(self.track_err2[env_ids] / steps.unsqueeze(1))
+        ep["track_rmse_vx"], ep["track_rmse_vy"], ep["track_rmse_wz"] = rmse[:, 0].mean(), rmse[:, 1].mean(), rmse[:, 2].mean()
+        ep["hl_saturated_frac"] = (self.sat_steps[env_ids] / steps).mean()                  # |raw action| > 1
+        ep["hl_abs_cmd"] = self.hl_raw[env_ids, :3].abs().mean()
+        ep["hl_abs_arm"] = self.hl_raw[env_ids, 3:].abs().mean()
+        turned = (self.turn_steps[env_ids] > 0).float()                                    # masked mean, no GPU sync
+        per_env = self.turn_dq_sum[env_ids] / self.turn_steps[env_ids].clamp_min(1.)
+        ep["upper_dq_turning_rad"] = (per_env * turned).sum() / turned.sum().clamp_min(1.)
+        ep["rel_yaw_abs_rad"] = (self.rel_yaw_abs_sum[env_ids] / steps).mean()
         if hasattr(self.ts, "force_norm_raw"):                           # not yet computed at the very first reset
             ep["grasp_force_max_N"] = self.ts.force_norm_raw.max()      # over all envs this step: spikes show up here
             ep["feet_caster_min_dist_m"] = self.ts.feet_caster_dist.min()
@@ -406,11 +511,15 @@ class PushCartEnv(PushCartSimEnv):
         if len(env_ids) == 0:
             return
         rs = self.reward_scales
-        w = rs.get("track_cart_lin_vel", 0.) + rs.get("track_cart_ang_vel", 0.)
         length = self.episode_length_buf[env_ids].clamp_min(1).float()
-        if w > 0 and "track_cart_lin_vel" in self.episode_sums:
-            tracking = (self.episode_sums["track_cart_lin_vel"][env_ids] + self.episode_sums["track_cart_ang_vel"][env_ids]) / (length * w)
-            self._track_sum += tracking.sum()
+        fracs = []
+        for name in ("track_cart_vx", "track_cart_vy", "track_cart_wz"):             # per-axis mean reward fraction
+            w = rs.get(name, 0.)
+            fracs.append(self.episode_sums[name][env_ids] / (length * w) if w > 0 and name in self.episode_sums else torch.ones_like(length))
+        self._track_sum += torch.stack(fracs, -1).sum(dim=0)
+        self._gain_vr += self.track_vr[env_ids].sum(dim=0)
+        self._gain_rr += self.track_rr[env_ids].sum(dim=0)
+        self._gain_steps += self.track_steps[env_ids].sum()
         failed = self.terminated_buf[env_ids]
         self._fail_sum += failed.float().sum()
         self._count += float(len(env_ids))
@@ -421,15 +530,19 @@ class PushCartEnv(PushCartSimEnv):
         if self.common_step_counter >= self._next_curriculum_eval and self._count.item() >= self.curriculum.window:
             self._next_curriculum_eval = self.common_step_counter + interval
             count = self._count.item()
-            tracking_mean = self._track_sum.item() / count
+            tracking_axes = (self._track_sum / count).tolist()
             fail_rate = self._fail_sum.item() / count
+            gains = (self._gain_vr / self._gain_rr.clamp_min(1e-6)).tolist()
+            cmd_rms = torch.sqrt(self._gain_rr / self._gain_steps.clamp_min(1.)).tolist()
             before = self.curriculum.level
-            changed = self.curriculum.record_window(tracking_mean, fail_rate)
+            changed = self.curriculum.record_window(tracking_axes, fail_rate, gains=gains, cmd_rms=cmd_rms)
             self._track_sum.zero_(); self._fail_sum.zero_(); self._count.zero_()
+            self._gain_vr.zero_(); self._gain_rr.zero_(); self._gain_steps.zero_()
             if changed:
                 self._apply_level(self.curriculum.params)
-                print(f"[pushcart-env] curriculum {before} -> {self.curriculum.level} "
-                      f"({int(count)} episodes: tracking {tracking_mean:.3f}, fail rate {fail_rate:.3f})", flush=True)
+                print(f"[pushcart-env] curriculum {before} -> {self.curriculum.level} ({int(count)} episodes: tracking "
+                      f"vx {tracking_axes[0]:.3f} vy {tracking_axes[1]:.3f} wz {tracking_axes[2]:.3f}, gain "
+                      f"vx {gains[0]:.2f} vy {gains[1]:.2f} wz {gains[2]:.2f}, fail rate {fail_rate:.3f})", flush=True)
 
     def _randomize_cart(self, env_ids):
         n, lp, rz, dev = len(env_ids), self.level_params, self.task_cfg.randomization, self.device
@@ -490,10 +603,14 @@ class PushCartEnv(PushCartSimEnv):
     def _reset_hl_state(self, env_ids):
         lp, tc, dev, n = self.level_params, self.task_cfg, self.device, len(env_ids)
         for buf in (self.hl_actions, self.hl_actions_prev, self.hl_actions_prev2, self.hl_action_raw_prev,
-                    self.upper_delta_q, self.vel_est, self.actor_hist, self.cart_pose_hist, self.force_c_prev):
+                    self.hl_raw, self.hl_raw_prev, self.hl_raw_prev2,
+                    self.upper_delta_q, self.vel_est, self.actor_hist, self.cart_pose_hist, self.force_c_prev,
+                    self.track_err2, self.track_steps, self.track_vr, self.track_rr,
+                    self.turn_dq_sum, self.turn_steps, self.rel_yaw_abs_sum, self.sat_steps):
             buf[env_ids] = 0.
         self.overload_counter[env_ids] = 0
         self.wheel_lift_counter[env_ids] = 0
+        self.overload_dir[env_ids] = False
         self.stall_timer[env_ids] = 0
         self.push_timer[env_ids] = 0
         self.push_force[env_ids] = 0.
@@ -593,7 +710,7 @@ class PushCartEnv(PushCartSimEnv):
         noise = lp.obs_noise_frac
         f = self.num_one_step_obs
         homie_frame = self.obs_buf[:, -f:]
-        task_cmd = self.cmd_task * self.commands_scale3
+        task_cmd = self.cmd_ref * self.commands_scale3                  # the reference the rewards are computed against
         mass = ((self.cart_mass_total - tc.observations.cart_mass_norm[0]) / tc.observations.cart_mass_norm[1]).unsqueeze(1)
         tau = ts.upper_tau * tc.observations.torque_scale
         if noise > 0:

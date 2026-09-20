@@ -14,7 +14,7 @@ from pathlib import Path
 import torch
 
 from .paths import ROOT
-from .task_config import HL_FRAME, HOMIE_FRAME, PushCartTaskCfg, num_actor_obs, num_critic_obs
+from .task_config import HL_FRAME, HOMIE_FRAME, PushCartTaskCfg, num_actor_obs, num_critic_obs, task_cfg_from_run
 
 
 class _PlainActor(torch.nn.Module):
@@ -39,7 +39,8 @@ def frame_layout(task_cfg: PushCartTaskCfg) -> list[dict]:
         ("dof_pos", 27, "joint position - HOMIE default, HOMIE order (12 legs, waist_yaw, 7 + 7 arm)"),
         ("dof_vel", 27, "joint velocity x 0.05"),
         ("leg_actions", 12, "previous HOMIE leg actions"),
-        ("task_cmd", 3, "task command (vx*, vy*, wz*) in the cart frame x [2, 2, 0.5]"),
+        ("task_cmd", 3, f"task command reference (vx*, vy*, wz*) in the cart frame x [2, 2, 0.5]; first-order response of the "
+                        f"commanded step, tau {task_cfg.commands.ref_tau_s} s (0 = the raw command)"),
         ("cart_mass", 1, f"(cart total mass kg - {s.cart_mass_norm[0]}) / {s.cart_mass_norm[1]}"),
         ("upper_torque", 15, f"measured upper-body joint torques x {s.torque_scale} (waist_yaw, 7 + 7 arm)"),
         ("est_base_lin_vel", 3, "HIM estimator base linear velocity x 2 (m/s x 2)"),
@@ -59,7 +60,7 @@ def frame_layout(task_cfg: PushCartTaskCfg) -> list[dict]:
 def export_checkpoint(checkpoint: Path, output_dir: Path | None = None, level: int = 17) -> dict:
     from .curriculum import level_params
     from .hl_policy import HighLevelPolicy
-    task_cfg = PushCartTaskCfg()
+    task_cfg = task_cfg_from_run(checkpoint)                       # the run's own residual scale / clip / reference
     hl = HighLevelPolicy(checkpoint, num_actor_obs(task_cfg), num_critic_obs(task_cfg), task_cfg.env.num_hl_actions, "cpu")
     plain = _PlainActor(hl.actor).eval()
     output_dir = output_dir or (Path(checkpoint).parent / "exported")
@@ -82,15 +83,19 @@ def export_checkpoint(checkpoint: Path, output_dir: Path | None = None, level: i
         "frame_layout": frame_layout(task_cfg),
         "obs_clip": 100.0,
         "action_dim": hl.num_actions, "action_clip": task_cfg.actions.clip,
+        "task_config_source": getattr(task_cfg, "source_yaml", None),
         "action_to_command": {
-            "homie_cmd_target": "clip(task_cmd + a[0:3] * cmd_residual_scale, homie_cmd_limits)",
+            "reference": f"cmd_ref += min(1, dt / {task_cfg.commands.ref_tau_s}) * (task_cmd - cmd_ref)  (tau 0: cmd_ref = task_cmd)",
+            "idle_gate": f"gate = clip(|cmd_ref| / {task_cfg.actions.idle_gate_speed}, 0, 1)  (0: no gate); scales a[0:3] and a[3:18]",
+            "homie_cmd_target": "clip(cmd_ref + gate * a[0:3] * cmd_residual_scale, homie_cmd_limits)",
             "cmd_residual_scale": task_cfg.actions.cmd_residual_scale, "homie_cmd_limits": task_cfg.actions.homie_cmd_limits,
             "low_pass": f"homie_cmd += min(1, dt / {task_cfg.actions.cmd_filter_tau_s}) * (target - homie_cmd)",
+            "action_clip": task_cfg.actions.clip,
         },
         "action_to_upper_targets": {
             "joints": ["waist_yaw"] + [f"{s}_{n}" for s in ("left", "right") for n in
                                        ("shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow", "wrist_roll", "wrist_pitch", "wrist_yaw")],
-            "delta_target_rad": "a[3:18] * scale, scale = [waist_scale] + [arm_scale] * 14",
+            "delta_target_rad": "gate * a[3:18] * scale, scale = [waist_scale] + [arm_scale] * 14",
             "scale_at_export_level": {"level": level, "waist_scale": lp.waist_scale, "arm_scale": lp.arm_scale},
             "slew_limit_rad_per_s": task_cfg.actions.upper_rate_limit_rad_s,
             "target": "clip(q_grasp + upper_hold_offset + delta, hard joint limits); q_grasp / upper_hold_offset from initial_pose.yaml",

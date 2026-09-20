@@ -203,6 +203,32 @@ MuJoCo 同场景 weld 力从 43–66 N 降到 3 N，且机器人完全静止。C
 
 首个可看的结果（`b4_homie60000` 的 `model_1800`，MuJoCo，上层开）：直推 0.3 / 0.6 的 vx RMSE 0.042 / 0.059（偏差 −0.02 / −0.03），转向 wz RMSE 0.091 / 0.106，25 kg 无终止，抓握力 p95 40–54 N。
 
+## 对比实验：`pushcart_bench/`（MuJoCo + viser）
+
+独立于 `HomieRL/` 的顶层测试包（只 import `homie_pushcart` 的 MuJoCo 环境、运行器和检查点加载，不碰训练代码）。同一套"巡线速度 PID"、同一组轨迹 / 阶跃 / 扰动条件，喂给任意"被测策略"，统一输出到点时间、误差、跟踪、交互力等指标与图表。入口 `run_pushcart_bench.ps1` = `scripts/pushcart_bench.py`。
+
+```powershell
+.\run_pushcart_bench.ps1 path   --policies robot_only passthrough two_stage:latest --mirror --seeds 0 1 2   # 实验 1
+.\run_pushcart_bench.ps1 path   --policies passthrough two_stage:latest --view --port 8080                   # 大 S 弯 live：载荷/速度可调
+.\run_pushcart_bench.ps1 step   --policies passthrough two_stage:latest                                     # 实验 2
+.\run_pushcart_bench.ps1 robust --policies passthrough two_stage:latest --factors payload_kg kick           # 实验 3
+.\run_pushcart_bench.ps1 report --out_dir logs\bench\<目录>                                                 # 重出表和图
+```
+
+**被测策略**（`pushcart_bench/policies.py`，接口 `PolicyUnderTest`：`reset / step(cmd) / pose / velocity / failure / telemetry`，命令是被测体坐标系下的 (vx, vy, wz)）：`passthrough` 任务命令直给冻结的 HOMIE、上肢保持抓握姿态（"原机器人控制器推车"）；`two_stage:<model_N.pt>|latest` 训练好的上层检查点 + HOMIE，均值动作，`--level` 决定臂/腰修正尺度；`robot_only` 没有车的 HOMIE，被测体是骨盆（上界参考，量化车带来的退化）；`plugin:<module>:<Class>` 任意实现了接口的类（未来的 RL 阶段）。车类策略还暴露鲁棒性扫描用的物理旋钮：载荷、重心偏移、轮摩擦、踢车冲量、单轮卡死。
+
+**轨迹**（`paths.py`，参数在 `pushcart_bench/config/benchmark.yaml`）：`straight` 6 m；`s_curve` 10 m 加窗正弦（幅 1.2 m、波长 5 m、两端偏移与航向为零，最小转弯半径 0.5 m）；`s_bend` 小半径驾考 S（半径 0.6 m，侧向鼓出 1.2 m）；`s_large` 大半径驾考 S（半径 2.5 m，直线引导 2 m，侧向鼓出 5 m，全长约 20 m，`--view` 默认走这条）；`right_angle` 4 m → 半径 0.6 m 的 90° 圆弧 → 4 m；`u_turn` 3 m → 半径 1 m 半圆 → 3 m 返回；`s_curve_gentle` 旧的宽正弦留作参考。`--mirror` 加上 `s_bend`、`s_large`、直角弯和 U 弯的右转镜像。轨迹在被测体复位后的位姿上对齐，终点即目标点。
+
+**巡线 PID**（`follower.py`，所有策略同一套，增益在 `robot_only` 上整定后冻结在 yaml 里）：前视纯跟踪 + 对前视点方位角的 PID 出 wz。默认批处理仍按曲率 / 剩余弧长减速（`k_curv`、`v_min_frac`），方便小半径弯贴线。`--cruise` 或 viser 里勾选「保持指定速度」时，弯道里 **vx 就等于滑条上的指定速度**（只在航向差 >90° 时不倒着冲），不再为贴线把速度压下去；终点前约 0.35 m 才归位停车。`--view` 进入交互：打开后**先待命不跑**，侧栏改路径 / 策略 / 载荷 / 指定 vx，调好镜头开录后再点绿色 **开始**。跑完回到待命。无 `--view` 时实验 1 仍按 yaml 网格自动跑完。
+
+**指标**（`metrics.py`）：成功 / 超时 / 失败原因，到点时间，首次进圈时间，到点误差，停稳后误差，最近距离，横向误差 mean/RMS/max，航向 RMS，走过长度 / 轨迹长度，命令跟踪 RMSE（命令 vs 实际 vx、wz），抓握力 |F| 与车坐标系推 / 侧 / 竖分量的 p95，过载阈值超限占比，命令与 HOMIE 命令变化率，上肢 |Δq| 均值。阶跃指标先做 0.4 s 滑动平均（步态 2 Hz 摆动）再算上升时间 10–90%、整定时间（10% 带）、超调、稳态误差（末 2 s）、稳态 RMSE，另有停止距离与零命令漂移。
+
+**三个实验**（`experiments.py`）：实验 1 巡线到点（无 `--view`：策略 × 轨迹 × 种子；有 `--view`：默认 `s_large`，载荷和指定速度在 viser 里改）；实验 2 速度阶跃（vx 0→0.3/0.6、0.6→0 停车、后退、wz ±0.3/±0.6、vy 0.25、零命令保持，载荷 0 / 12.5 / 25 kg，不走巡线器）；实验 3 鲁棒性扫描（固定 S 弯 + 固定增益，单因子：载荷 0–50 kg、万向轮初始角、轮摩擦、重心偏移、周期踢车、单轮卡死，其余取默认）。结果写到 `logs/bench/<时间戳>_<kind>/`。
+
+**公平性约定**：同一套巡线增益与限幅，同一 MuJoCo 模型与 HOMIE `model_60000`，同一初始位姿与种子，两级策略用均值动作；车类策略的命令与目标以推车底盘原点为准，`robot_only` 以骨盆为准（同一几何轨迹，起点各自对齐）。两级策略按**它自己训练时的任务配置**运行（`task_cfg_from_run` 读运行目录的 `params/env.yaml`：残差尺度、动作 clip、臂尺度、命令参考滤波、零命令闸），所以第 2 版与第 3 版检查点可以同场对比；查看器与导出同样如此。
+
+首批数据（`b4_homie60000/model_1800`，5 kg，`logs/bench/2026-09-18_01-10-30_path` 等三个目录）：三个策略在 6 条轨迹上全部到点。robot_only 到点误差 0.01–0.03 m、横向 RMS 0.03–0.04 m；passthrough 到点误差 0.03–0.05 m，直角弯 / U 弯横向 RMS 0.07 / 0.13 m（转向不足，U 弯外甩 0.26 m），wz 跟踪 RMSE 0.29–0.31；两级策略 wz 跟踪 RMSE 0.11–0.21、直角弯横向 RMS 0.05，但到点误差 0.05–0.09 m、抓握力 p95 50 N（passthrough 30 N），S 弯 / 镜像 U 弯上要靠倒车归位才停进圈（43.7 / 35.8 s vs passthrough 35.7 / 24.6 s）。阶跃：两级策略 vx 上升 0.34 s vs 1.0 s、wz 稳态误差 0.02 vs −0.15，超调 0.2–0.4；**零命令下漂移**（保持 10 s：0 kg 漂 0.09 m，25 kg 漂 0.41 m，passthrough 0.01 m）——这正是第 3 版训练计划里 std 失控与 `stand_still` 权重要解决的问题。鲁棒性（S 弯）：passthrough 37.5 kg 起停不进圈（超时），两级策略 0–50 kg 全部到点但慢 6–14 s、横向 RMS 大 0.02–0.04 m；万向轮初始角、轮摩擦、重心偏移、踢车、单轮卡死对两者的影响都在厘米级。
+
 ## 实现说明
 
 - `sim_env.py` 的 `PushCartSimEnv` 继承 `HomieIsaacLabEnv`，只覆写场景构建、上肢目标（保持抓握姿态 + 修正量）、外部命令、预设姿态复位；观测、PD 力矩、步进逻辑全部继承，`homie_isaaclab/` 不改。`task_env.py` 的 `PushCartEnv` 再在其上加上层策略的动作/观测/奖励/终止/课程；`direct_env.py` + `lab_config.py` 把它接到 Isaac Lab 的 `DirectRLEnv` 与 RSL-RL 5。

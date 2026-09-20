@@ -31,7 +31,7 @@ from .evaluate import SCENARIOS
 from .gamepad import BUTTON_A, BUTTON_B, XInputGamepad
 from .mujoco_teleop import MujocoViserRenderer, _yaw_deg
 from .paths import ROOT
-from .task_config import PushCartTaskCfg
+from .task_config import task_cfg_from_run
 from .teleop import CommandMapper
 
 HL_LOG_DIR = ROOT / "logs" / "rsl_rl" / "homie_pushcart"
@@ -84,9 +84,9 @@ class TwoStageViewer:
         from .task_config import num_actor_obs, num_critic_obs
 
         self.args = args
-        self.tc = PushCartTaskCfg()
         self.hl_checkpoint = find_hl_checkpoint(getattr(args, "checkpoint", None), getattr(args, "run", None))
         self.run_dir = self.hl_checkpoint.parent
+        self.tc = task_cfg_from_run(self.hl_checkpoint)     # the run's own task config (residual scale, clip, reference ...)
         self.level = int(args.level) if args.level is not None else self.tc.curriculum.num_levels - 1
         hl_args = SimpleNamespace(checkpoint=self.hl_checkpoint, homie_checkpoint=getattr(args, "homie_checkpoint", None), level=self.level)
         self.runner, self.homie_checkpoint = make_runner(hl_args)

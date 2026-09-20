@@ -1,0 +1,119 @@
+# Push-cart control benchmark configuration (MuJoCo + viser). Lengths m, speeds m/s, angles deg unless noted.
+# Every policy under test is driven by the same follower gains, the same paths and the same conditions.
+defaults:
+  payload_kg: 5.0                 # nominal payload on the cart (experiment 1)
+  caster_angle_deg: 0.0           # initial swivel angle of all four casters (0 = aligned with the cart)
+  seeds: [0]                      # MuJoCo + deterministic policies: runs are bit-exact repeatable; seeds only matter
+                                  # for the random disturbances of the robustness sweep (robust.seeds)
+  level: 17                       # curriculum level of the two-stage policy (upper-body correction scale)
+  transient_s: 1.5                # step tests: ignored window after a command change for the RMSE statistics
+  step_filter_s: 0.4              # step tests: moving average before rise / settling / overshoot (gait oscillation ~2 Hz)
+
+# Shared high-level path-following controller (pushcart_bench/follower.py). Tuned once on robot_only, then frozen.
+follower:
+  mode: car                       # car (vy = 0) | holonomic (vy from the lateral lookahead offset)
+  v_nom: 0.5
+  cruise: false                   # true: hold v_nom in curves (no k_curv / remaining slowdown); viser --view defaults on
+  lookahead_base: 0.4
+  lookahead_gain: 0.6
+  lookahead_min: 0.4
+  lookahead_max: 1.0
+  kp_yaw: 1.5
+  ki_yaw: 0.1
+  kd_yaw: 0.05
+  i_limit: 0.3
+  k_curv: 0.6
+  v_min_frac: 0.35
+  kp_goal: 1.0
+  v_near: 0.25
+  near_dist: 0.6
+  v_min_cmd: 0.1
+  t_lag: 0.6
+  kp_lat: 1.0
+  goal_radius: 0.10
+  goal_speed: 0.06
+  goal_hold_s: 0.5
+  post_reach_s: 1.0
+  timeout_s: 60.0
+  nearest_window_m: 3.0
+  cmd_limits: [[-0.6, 0.9], [-0.35, 0.35], [-0.6, 0.6]]     # task-command ranges = 75 % of HOMIE's training ranges
+  rate_limits: [1.0, 1.0, 2.0]
+
+# Optional gain sweep (--gain_sweep): every combination is run for every policy; the report lists the best per policy.
+gain_sweep:
+  v_nom: [0.4, 0.5, 0.6]
+  kp_yaw: [1.0, 1.5, 2.0]
+
+# Experiment 1: the four representative paths (local frame, start at the tracked body, heading +x). All turn left;
+# --mirror adds the right-turning copies of the entries in `mirror`.
+paths:
+  straight:
+    type: straight
+    length: 6.0
+  s_curve:                        # tight windowed sine: +-1.2 m in 5 m wavelength, min turning radius ~0.5 m
+    type: s_curve
+    length: 10.0
+    amplitude: 1.2
+    periods: 2
+  s_bend:                         # tight driving-test S: 90 / 180 / 90 deg at radius 0.6 m (curvature 1.67)
+    type: s_bend
+    radius: 0.6
+    lead: 1.0
+  s_large:                        # wide driving-test S for live view: radius 2.5 m, bulge 5 m, ~20 m long
+    type: s_bend
+    radius: 2.5
+    lead: 2.0
+  right_angle:                    # 4 m -> 90 deg arc of radius 0.6 m -> 4 m
+    type: right_angle
+    l1: 4.0
+    l2: 4.0
+    radius: 0.6
+  u_turn:                         # 3 m -> semicircle of radius 1 m -> 3 m back (parallel, 2 m offset)
+    type: u_turn
+    l_out: 3.0
+    radius: 1.0
+    l_back: 3.0
+  s_curve_gentle:                 # the wide sine (+-1 m, 6 m wavelength, radius ~0.9 m): reference, everything follows it
+    type: s_curve
+    length: 12.0
+    amplitude: 1.0
+    periods: 2
+mirror: [s_bend, s_large, right_angle, u_turn]
+
+# Experiment 2: velocity steps given directly to the policy (no follower). cmd = (vx, vy, wz) in the tracked
+# body frame; `pre_s` seconds of cmd0, then cmd1 until `seconds`. `signal` picks the response variable.
+steps:
+  - {name: vx_0_to_03,  cmd0: [0.0, 0.0, 0.0], cmd1: [0.3, 0.0, 0.0],  pre_s: 2.0, seconds: 8.0, signal: vx}
+  - {name: vx_0_to_06,  cmd0: [0.0, 0.0, 0.0], cmd1: [0.6, 0.0, 0.0],  pre_s: 2.0, seconds: 8.0, signal: vx}
+  - {name: stop_06,     cmd0: [0.6, 0.0, 0.0], cmd1: [0.0, 0.0, 0.0],  pre_s: 5.0, seconds: 10.0, signal: vx, stopping: true}
+  - {name: vx_0_to_m03, cmd0: [0.0, 0.0, 0.0], cmd1: [-0.3, 0.0, 0.0], pre_s: 2.0, seconds: 8.0, signal: vx}
+  - {name: wz_p03,      cmd0: [0.3, 0.0, 0.0], cmd1: [0.3, 0.0, 0.3],  pre_s: 3.0, seconds: 9.0, signal: wz}
+  - {name: wz_m03,      cmd0: [0.3, 0.0, 0.0], cmd1: [0.3, 0.0, -0.3], pre_s: 3.0, seconds: 9.0, signal: wz}
+  - {name: wz_p06,      cmd0: [0.3, 0.0, 0.0], cmd1: [0.3, 0.0, 0.6],  pre_s: 3.0, seconds: 9.0, signal: wz}
+  - {name: wz_m06,      cmd0: [0.3, 0.0, 0.0], cmd1: [0.3, 0.0, -0.6], pre_s: 3.0, seconds: 9.0, signal: wz}
+  - {name: vy_p025,     cmd0: [0.0, 0.0, 0.0], cmd1: [0.0, 0.25, 0.0], pre_s: 2.0, seconds: 8.0, signal: vy}
+  - {name: hold,        cmd0: [0.0, 0.0, 0.0], cmd1: [0.0, 0.0, 0.0],  pre_s: 0.0, seconds: 10.0, signal: vx, drift: true}
+step_payloads: [0.0, 12.5, 25.0]
+
+# Experiment 3: robustness sweep on one path with frozen gains; one factor varied at a time, the others at defaults.
+robust:
+  path: s_curve
+  seeds: [0, 1]
+  factors:
+    payload_kg: [0.0, 12.5, 25.0, 37.5, 50.0]
+    caster_angle_deg: [0.0, 90.0, 180.0]
+    wheel_friction: [0.4, 0.8, 1.2]
+    payload_com_offset_m: [-0.1, 0.0, 0.1]              # along the cart x axis
+    kick: [0.0, 0.1, 0.15]                              # planar velocity impulse [m/s] on the cart every kick_interval_s
+    wheel_stall: [0.0, 10.0, 20.0]                      # damping factor of one random wheel for stall_duration_s
+  kick_interval_s: 5.0
+  stall_prob_per_s: 0.2
+  stall_duration_s: 0.3
+
+# Grasp-overload thresholds (finger-borne directions) used only for the "fraction of time over threshold"
+# statistic; same numbers as the training termination at curriculum multiplier 1.0.
+overload_thresholds:
+  pull: 80.0
+  up: 60.0
+  tangential: 50.0
+  per_kg: 1.0
