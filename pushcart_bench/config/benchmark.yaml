@@ -1,5 +1,14 @@
 # Push-cart control benchmark configuration (MuJoCo + viser). Lengths m, speeds m/s, angles deg unless noted.
 # Every policy under test is driven by the same follower gains, the same paths and the same conditions.
+# Recovery is measured after a known disturbance ends. Errors use the policy reference (when available),
+# equal causal filtering of reference/velocity, then remain in the bands for hold_s. Events interrupted
+# by another disturbance and unrecovered events are kept explicitly in runs.json.
+recovery:
+  velocity_tolerance: [0.08, 0.06, 0.10]   # m/s, m/s, rad/s
+  cross_track_m: 0.10
+  hold_s: 0.5
+  filter_tau_s: 0.2
+
 defaults:
   payload_kg: 5.0                 # nominal payload on the cart (experiment 1)
   caster_angle_deg: 0.0           # initial swivel angle of all four casters (0 = aligned with the cart)

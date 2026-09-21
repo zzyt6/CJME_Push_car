@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 from .paths import ROOT
+from .cart_quality import QUALITY_PROFILES, quality_profile_overrides
 
 TASK_ID = "Homie-G1-PushCart-Direct-v0"
 EXPERIMENT = "homie_pushcart"
@@ -64,8 +65,13 @@ def train(argv: list[str]) -> int:
     parser.add_argument("--level", type=int, help="curriculum start level")
     parser.add_argument("--no_randomization", action="store_true")
     parser.add_argument("--checkpoint", help="resume from this high-level checkpoint (inside logs/rsl_rl/homie_pushcart)")
+    parser.add_argument("--quality_profile", choices=QUALITY_PROFILES, help="opt-in V3.1 cart-quality experiment")
     parser.add_argument("--experiment_name", default=EXPERIMENT)
     options, args = parser.parse_known_args(argv)
+    if options.quality_profile:
+        overrides = quality_profile_overrides(options.quality_profile)
+        args = [f"env.task.{key}={str(value).lower() if isinstance(value, bool) else value}"
+                for key, value in overrides.items()] + args
     if options.homie_checkpoint:
         args.append(f"env.checkpoint={Path(options.homie_checkpoint).resolve().as_posix()}")
     if options.level is not None:

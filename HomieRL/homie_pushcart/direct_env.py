@@ -70,6 +70,10 @@ class PushCartDirectEnv(DirectRLEnv):
                 "actor_obs": self.homie.num_hl_obs, "critic_obs": self.homie.num_hl_critic_obs,
                 "actions": self.homie.num_hl_actions, "initial_level": self.homie.curriculum.level,
                 "level_params": self.homie.level_params.as_dict(),
+                "cart_quality": ({**self.homie.cart_quality.metadata(),
+                                  "wrench_source": "physx_incoming_joint_gravity_compensated_proxy",
+                                  "moment_origin": "cart_assembly_com", "sampling": "last_physics_substep_at_control_rate"}
+                                 if self.homie.cart_quality is not None else None),
             }, indent=2), encoding="utf-8")
 
     @property

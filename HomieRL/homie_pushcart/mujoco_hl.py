@@ -21,6 +21,7 @@ import torch
 
 from .assets.mjcf_scene import CART_BODY
 from .curriculum import level_params
+from .cart_quality import CartQualityTracker
 from .mujoco_env import MujocoHomieEnv, quat_rotate_inverse_wxyz
 from .paths import HOMIE_RUN_DIR, ROOT
 from .task_config import HL_FRAME, PushCartTaskCfg, num_actor_obs, num_critic_obs, task_cfg_from_run
@@ -72,6 +73,8 @@ class MujocoHighLevelRunner:
         self.swivel_qpos = [m.joint(f"caster_{i}_swivel_joint").qposadr[0] for i in range(4)]
         self.cart_free = m.joint("cart_free")
         self.upper_act = env.act_idx[n_low:]
+        self.quality = CartQualityTracker(tc.quality, self.dt, 1, dtype=torch.float64)
+        self.wheel_body_ids = [mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, f"wheel_{i}") for i in range(4)]
         self.reset_buffers()
 
     # ------------------------------------------------------------------ state
@@ -94,6 +97,7 @@ class MujocoHighLevelRunner:
         mujoco.mj_setConst(m, self.env.data)
 
     def reset_buffers(self):
+        self.quality.reset()
         self.cmd_task = np.zeros(3)
         self.cmd_ref = np.zeros(3)
         self.cmd_homie = np.zeros(3)
@@ -139,6 +143,13 @@ class MujocoHighLevelRunner:
             "bar_b": bar_b, "rel_yaw": rel_yaw, "dist": float(np.hypot(rel[0], rel[1])), "cart_tilt": tilt,
             "upper_tau": d.ctrl[self.upper_act].copy(), "grasp": env.grasp_forces(),
         }
+        hands = env.grasp_cart_wrenches()
+        total = sum(hands.values(), np.zeros(6))
+        self.ts.update({"cart_yaw": yaw, "cart_com_w": d.subtree_com[self.cart_body].copy(),
+                        "cart_force_w": total[:3], "cart_moment_w": total[3:], "hand_cart_wrenches": hands,
+                        "cart_task_wrench": np.array([c * total[0] + s * total[1], -s * total[0] + c * total[1], total[5]]),
+                        "robot_tilt_rad": float(np.arcsin(np.clip(np.linalg.norm(env.projected_gravity[:2]), 0, 1))),
+                        "wheel_lift_m": float(np.maximum(d.xpos[self.wheel_body_ids, 2] - env.cart_params["wheels"]["radius"], 0).max())})
         return self.ts
 
     # ------------------------------------------------------------------ stepping
@@ -168,6 +179,9 @@ class MujocoHighLevelRunner:
         self.vel_est = vel_est.squeeze(0).cpu().numpy() / env.obs_scales["lin_vel"]
         self._obs, fallen = env.step(legs.squeeze(0).cpu().numpy())
         self.task_state()
+        self.quality.update(torch.tensor([[*self.ts["cart_v"], self.ts["cart_wz"]]], dtype=torch.float64),
+                            torch.from_numpy(self.cmd_ref[None]), torch.tensor([self.ts["cart_yaw"]], dtype=torch.float64),
+                            torch.from_numpy(self.ts["cart_force_w"][None]), torch.from_numpy(self.ts["cart_moment_w"][None]))
         self._update_hl_obs(fresh=False)
         return self.hl_obs, fallen
 

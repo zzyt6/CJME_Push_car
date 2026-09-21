@@ -74,7 +74,10 @@ class CartPolicyBase:
         return {"name": self.name, "kind": "two_stage" if self.hl_checkpoint else "passthrough", "tracks": self.tracks,
                 "hl_checkpoint": str(self.hl_checkpoint) if self.hl_checkpoint else None,
                 "hl_iteration": getattr(self.runner.hl, "iteration", None) if self.runner.hl is not None else None,
-                "homie_checkpoint": str(self.homie_checkpoint), "level": self.level}
+                "homie_checkpoint": str(self.homie_checkpoint), "level": self.level,
+                "cart_quality": {**self.runner.quality.metadata(), "wrench_source": "mujoco_weld_jacobian",
+                                 "moment_origin": "cart_assembly_com", "axes": "cart_heading_z_world",
+                                 "sampling": "last_physics_substep_at_control_rate"}}
 
     def reset(self, payload_kg: float = 0.0, caster_angle: float = 0.0, seed: int = 0, *,
               wheel_friction: float | None = None, com_offset_m: float = 0.0) -> None:
@@ -125,6 +128,20 @@ class CartPolicyBase:
             out[f"push_{side}"] = float(c * f[0] + s * f[1])          # cart-frame x (hand -> cart)
             out[f"lat_{side}"] = float(-s * f[0] + c * f[1])          # cart-frame y
             out[f"up_{side}"] = float(f[2])
+        force, moment = ts["cart_force_w"], ts["cart_moment_w"]
+        wrench = (c * force[0] + s * force[1], -s * force[0] + c * force[1], force[2],
+                  c * moment[0] + s * moment[1], -s * moment[0] + c * moment[1], moment[2])
+        out.update(dict(zip(("cart_fx", "cart_fy", "cart_fz", "cart_mx", "cart_my", "cart_mz"), map(float, wrench))))
+        q = self.runner.quality
+        out.update(dict(zip(("cart_vx_band", "cart_vy_band", "cart_wz_band"), q.velocity_band[0].tolist())))
+        out.update(dict(zip(("cart_fx_band", "cart_fy_band", "cart_mz_band"), q.wrench_band[0].tolist())))
+        out.update(dict(zip(("cart_ref_vx", "cart_ref_vy", "cart_ref_wz"), self.runner.cmd_ref.tolist())))
+        out.update({"cart_tilt_rad": float(np.arcsin(np.clip(ts["cart_tilt"], 0, 1))),
+                    "robot_tilt_rad": ts["robot_tilt_rad"], "wheel_lift_m": ts["wheel_lift_m"],
+                    "quality_ready": bool(q.ready[0]), "cart_ripple_cost": float(q.ripple_cost[0]),
+                    "cart_wrench_osc_cost": float(q.wrench_cost[0])})
+        for side, value in ts["hand_cart_wrenches"].items():
+            out[f"cart_mz_{side}"] = float(value[5])
         return out
 
     # -- physical knobs (robustness sweep)

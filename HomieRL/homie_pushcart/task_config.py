@@ -91,6 +91,9 @@ class PushCartTaskCfg(BaseConfig):
             force_budget = -0.5
             force_waste = -0.5
             force_rate = -0.2
+            # V3.1 experimental terms: opt in with train --quality_profile; old runs stay unchanged.
+            cart_ripple = 0.0
+            cart_wrench_osc = 0.0
             wrist_saturation = -1.0
             grasp_pull_up = -1.0
             wheel_lift = -2.0
@@ -127,6 +130,20 @@ class PushCartTaskCfg(BaseConfig):
         joint_limit_margin = 0.03                    # fraction of the upper-body joint range
         feet_caster_clear_m = 0.12                   # horizontal foot-caster distance below which the proximity penalty starts
         force_clip_n = 400.0                         # grasp forces are clipped here before any penalty / observation
+
+    class quality:
+        enabled = False                            # training diagnostics / filters; no change to actor inputs
+        # Initial experimental band, to be checked against full-rate baseline traces before long training.
+        low_hz = 0.5
+        high_hz = 5.0
+        warmup_s = 1.0                             # first valid sample seeds filters; exclude initial settling
+        reward_ramp_s = 60.0                       # linear ramp over environment control time after launch
+        velocity_scale = [0.05, 0.05, 0.10]        # m/s, m/s, rad/s
+        velocity_deadband = [0.005, 0.005, 0.01]
+        wrench_scale = [20.0, 20.0, 5.0]           # N, N, N.m; fixed scale, not a desired force
+        wrench_deadband = [1.0, 1.0, 0.2]
+        wrench_input_clip = [800.0, 800.0, 200.0]  # reward-filter input only; raw telemetry stays raw
+        cost_cap = 4.0                             # caps new penalties; tracking/progress remains primary
 
     class termination:
         # finger-borne grasp directions only (cart frame): pulling the bar, lifting it, sliding along it, twisting

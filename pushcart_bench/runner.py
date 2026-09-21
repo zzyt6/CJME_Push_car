@@ -32,6 +32,7 @@ class Disturbance:
         self._next_kick = self.kick_interval_s * (0.5 + 0.5 * self.rng.random()) if self.kick_dv > 0 else math.inf
         self._stall_until, self._stall_wheel = -1.0, None
         self.events = {"kicks": 0, "stalls": 0}
+        self.event_log = []
 
     def apply(self, policy, t: float, dt: float):
         if t >= self._next_kick:
@@ -39,6 +40,8 @@ class Disturbance:
             policy.kick(self.kick_dv * np.array([math.cos(ang), math.sin(ang)]))
             self._next_kick = t + self.kick_interval_s * (0.8 + 0.4 * self.rng.random())
             self.events["kicks"] += 1
+            self.event_log.append({"kind": "kick", "t": t, "end_t": t, "dv": self.kick_dv,
+                                   "direction_rad": float(ang)})
         if self.stall_factor > 1.0:
             if self._stall_wheel is not None and t >= self._stall_until:
                 policy.set_wheel_damping_factor(self._stall_wheel, 1.0)
@@ -48,6 +51,8 @@ class Disturbance:
                 policy.set_wheel_damping_factor(self._stall_wheel, self.stall_factor)
                 self._stall_until = t + self.stall_duration_s
                 self.events["stalls"] += 1
+                self.event_log.append({"kind": "wheel_stall", "t": t, "end_t": self._stall_until,
+                                       "wheel": self._stall_wheel, "factor": self.stall_factor})
 
     def to_dict(self) -> dict:
         return {"kick_dv": self.kick_dv, "kick_interval_s": self.kick_interval_s, "stall_factor": self.stall_factor,
@@ -116,11 +121,19 @@ def run_path(policy, path_local: Path, follower_cfg: FollowerConfig, cond: Condi
                 break
     info = follower.info()
     metrics = path_metrics(trace, path, info, _overload_thresholds(cfg, cond.payload_kg))
+    recovery = None
+    if dist.active():
+        from .metrics import disturbance_recovery_metrics
+        recovery = disturbance_recovery_metrics(trace, dist.event_log, cfg.get("recovery", {}))
+        metrics.update(recovery["metrics"])
     result = {
         "kind": "path", "label": label, "policy": policy.describe(), "path": path_local.name, "path_params": path_local.params,
         "path_length": path.length, "path_min_radius": path.min_radius, "condition": cond.to_dict(),
         "disturbance": dist.to_dict() if dist.active() else None, "disturbance_events": dist.events if dist.active() else None,
-        "follower": follower_cfg.to_dict(), "metrics": metrics, "trace": trace.decimated(5),
+        "disturbance_event_log": dist.event_log, "recovery": recovery,
+        "follower": follower_cfg.to_dict(), "metrics": metrics,
+        "trace_dt_s": policy.dt * int(cfg.get("trace_stride", 5)),
+        "trace": trace.decimated(int(cfg.get("trace_stride", 5))),
         "path_xy": path.xy[::10].round(4).tolist(), "goal": list(path.goal), "wall_s": time.perf_counter() - wall,
     }
     if viewer is not None:
@@ -176,8 +189,11 @@ def run_step(policy, step: dict, cond: Condition, cfg: dict, viewer=None, label:
         m["ripple_rms"] = float(np.std(err))
     from .metrics import interaction_metrics
     m.update(interaction_metrics(trace, _overload_thresholds(cfg, cond.payload_kg)))
+    from .metrics import cart_quality_metrics
+    m.update(cart_quality_metrics(trace, start_s=pre_s + tr))
     result = {"kind": "step", "label": label, "policy": policy.describe(), "step": step, "condition": cond.to_dict(),
-              "metrics": m, "trace": trace.decimated(2)}
+              "metrics": m, "trace_dt_s": policy.dt * int(cfg.get("trace_stride", 2)),
+              "trace": trace.decimated(int(cfg.get("trace_stride", 2)))}
     if viewer is not None:
         viewer.end_run(result)
     return result

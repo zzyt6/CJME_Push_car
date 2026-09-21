@@ -28,6 +28,7 @@ import warp as wp
 from homie_isaaclab.math_utils import euler_from_quaternion, quat_apply, quat_mul, quat_rotate_inverse, torch_rand_float
 
 from .curriculum import CurriculumTracker, LevelParams
+from .cart_quality import CartQualityTracker, rotate_planar
 from .lowlevel import HimLowLevelPolicy, frozen_checkpoint
 from .paths import HOMIE_JOINTS, HOMIE_RUN_DIR, ROOT
 from .sim_env import PushCartSimEnv
@@ -171,6 +172,14 @@ class PushCartEnv(PushCartSimEnv):
         self.fixed_command = None
         self.fixed_payload_kg = None
         self.fixed_caster_angle = None
+        self.cart_quality = None
+        if self.task_cfg.quality.enabled:
+            self.cart_quality = CartQualityTracker(self.task_cfg.quality, self.dt, N, dev)
+        elif any(getattr(self.task_cfg.rewards.scales, key) != 0 for key in ("cart_ripple", "cart_wrench_osc")):
+            raise ValueError("cart quality rewards require task.quality.enabled=true")
+        self.quality_sums = {name: z(N, 3) for name in ("velocity_band2", "wrench_band2", "raw_error2", "task_wrench")}
+        self.quality_steps = z(N)
+        self.quality_peaks = {name: z(N) for name in ("force_N", "moment_Nm", "cart_tilt_rad", "robot_tilt_rad")}
 
     def _apply_level(self, params: LevelParams):
         self.level_params = params
@@ -244,6 +253,10 @@ class PushCartEnv(PushCartSimEnv):
         self.cart_vel_f += self.meas_alpha * (vel - self.cart_vel_f)
         self.cmd_ref_f += self.meas_alpha * (self.cmd_ref - self.cmd_ref_f)
         self.base_wz_f += self.meas_alpha * (self.base_ang_vel[:, 2] - self.base_wz_f)
+        if self.cart_quality is not None:
+            self.cart_quality.update(vel, self.cmd_ref, self.ts.cart_yaw,
+                                     self.ts.cart_force_w, self.ts.cart_moment_w,
+                                     valid=self.episode_length_buf > 0)
         self._update_persistence_counters()
         self._accumulate_diagnostics()
 
@@ -265,6 +278,11 @@ class PushCartEnv(PushCartSimEnv):
         force_w, torque_w, _ = self.grasp_wrench()
         valid = (self.episode_length_buf > 0).view(N, 1, 1).float()   # PhysX wrench is stale right after a reset
         force_w, torque_w = force_w * valid, torque_w * valid
+        ts.force_w_raw, ts.torque_w_raw = force_w, torque_w
+        if self.cart_quality is not None:
+            ts.cart_force_w, ts.cart_moment_w, ts.cart_com_w = self.cart_hand_wrench(force_w, torque_w)
+            wrench_w = torch.stack((ts.cart_force_w[:, 0], ts.cart_force_w[:, 1], ts.cart_moment_w[:, 2]), -1)
+            ts.cart_task_wrench = rotate_planar(wrench_w, ts.cart_yaw, inverse=True)
         # raw magnitudes for the blow-up guard; everything downstream sees clipped forces so that one solver
         # event cannot dominate an episode return
         ts.force_norm_raw = force_w.norm(dim=-1)
@@ -323,6 +341,20 @@ class PushCartEnv(PushCartSimEnv):
         self.turn_steps += turning
         self.rel_yaw_abs_sum += ts.rel_yaw.abs()
         self.sat_steps += (self.hl_raw.abs() > 1.0).float().mean(dim=1)
+        q = self.cart_quality
+        if q is not None:
+            valid = q.ready.float().unsqueeze(1)
+            self.quality_steps += q.ready.float()
+            self.quality_sums["velocity_band2"] += q.velocity_band.square() * valid
+            self.quality_sums["wrench_band2"] += q.wrench_band.square() * valid
+            raw_error = torch.cat((ts.cart_v, ts.cart_wz.unsqueeze(1)), -1) - self.cmd_ref
+            self.quality_sums["raw_error2"] += raw_error.square() * valid
+            self.quality_sums["task_wrench"] += ts.cart_task_wrench * valid
+            peaks = {"force_N": ts.cart_force_w.norm(dim=-1), "moment_Nm": ts.cart_moment_w.norm(dim=-1),
+                     "cart_tilt_rad": torch.asin(ts.cart_tilt.clamp(0, 1)),
+                     "robot_tilt_rad": torch.asin(self.projected_gravity[:, :2].norm(dim=-1).clamp(0, 1))}
+            for name, value in peaks.items():
+                self.quality_peaks[name] = torch.maximum(self.quality_peaks[name], value)
 
     # ------------------------------------------------------------------ terminations
     def check_termination(self):
@@ -396,6 +428,16 @@ class PushCartEnv(PushCartSimEnv):
         rate = torch.sum(torch.square(self.ts.force_c - self.force_c_prev), dim=(1, 2)) / torch.square(self.ts.budget)
         self.force_c_prev.copy_(self.ts.force_c)
         return rate
+
+    def _quality_reward_ramp(self):
+        seconds = float(self.task_cfg.quality.reward_ramp_s)
+        return min(1.0, self.common_step_counter * self.dt / seconds) if seconds > 0 else 1.0
+
+    def _reward_cart_ripple(self):
+        return self.cart_quality.ripple_cost * self._quality_reward_ramp()
+
+    def _reward_cart_wrench_osc(self):
+        return self.cart_quality.wrench_cost * self._quality_reward_ramp()
 
     def _reward_wrist_saturation(self):
         rc = self.task_cfg.rewards
@@ -501,6 +543,20 @@ class PushCartEnv(PushCartSimEnv):
         per_env = self.turn_dq_sum[env_ids] / self.turn_steps[env_ids].clamp_min(1.)
         ep["upper_dq_turning_rad"] = (per_env * turned).sum() / turned.sum().clamp_min(1.)
         ep["rel_yaw_abs_rad"] = (self.rel_yaw_abs_sum[env_ids] / steps).mean()
+        if self.cart_quality is not None:
+            counts = self.quality_steps[env_ids]
+            valid = (counts > 0).float()
+            for name, values in self.quality_sums.items():
+                values = values[env_ids] / counts.clamp_min(1).unsqueeze(1)
+                if name.endswith("2"):
+                    values = values.clamp_min(0).sqrt()
+                axes = ("fx_N", "fy_N", "mz_Nm") if "wrench" in name else ("vx", "vy", "wz")
+                for i, axis in enumerate(axes):
+                    ep[f"quality_{name.removesuffix('2')}_{axis}"] = (values[:, i] * valid).sum() / valid.sum().clamp_min(1)
+            for name, values in self.quality_peaks.items():
+                ep[f"quality_peak_{name}"] = values[env_ids].max()
+            ep["quality_valid_samples"] = counts.mean()
+            ep["quality_reward_ramp"] = torch.tensor(self._quality_reward_ramp(), device=self.device)
         if hasattr(self.ts, "force_norm_raw"):                           # not yet computed at the very first reset
             ep["grasp_force_max_N"] = self.ts.force_norm_raw.max()      # over all envs this step: spikes show up here
             ep["feet_caster_min_dist_m"] = self.ts.feet_caster_dist.min()
@@ -614,6 +670,11 @@ class PushCartEnv(PushCartSimEnv):
         self.stall_timer[env_ids] = 0
         self.push_timer[env_ids] = 0
         self.push_force[env_ids] = 0.
+        if self.cart_quality is not None:
+            self.cart_quality.reset(env_ids)
+        self.quality_steps[env_ids] = 0.
+        for buf in (*self.quality_sums.values(), *self.quality_peaks.values()):
+            buf[env_ids] = 0.
         noise = lp.obs_noise_frac
         self.cart_pose_delay[env_ids] = torch.randint(0, int(round(noise * tc.observations.cart_pose_delay_steps_max)) + 1, (n,), device=dev)
         self.hl_delay[env_ids] = torch.randint(0, int(round(noise * tc.actions.delay_steps_max)) + 1, (n,), device=dev)

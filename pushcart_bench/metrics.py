@@ -7,6 +7,14 @@ import math
 import numpy as np
 
 
+CART_QUALITY_SIGNALS = (
+    "cart_fx", "cart_fy", "cart_fz", "cart_mx", "cart_my", "cart_mz", "cart_mz_left", "cart_mz_right",
+    "cart_vx_band", "cart_vy_band", "cart_wz_band", "cart_fx_band", "cart_fy_band", "cart_mz_band",
+    "cart_ref_vx", "cart_ref_vy", "cart_ref_wz", "cart_tilt_rad", "robot_tilt_rad", "wheel_lift_m",
+    "quality_ready", "cart_ripple_cost", "cart_wrench_osc_cost",
+)
+
+
 @dataclass
 class Trace:
     """Per-control-step record of one run (lists, appended by the runner)."""
@@ -57,6 +65,10 @@ class Trace:
             series = self.telemetry_series(key)
             if np.isfinite(series).any():
                 out[key] = [None if not np.isfinite(v) else round(float(v), 2) for v in series[sl]]
+        for key in CART_QUALITY_SIGNALS:
+            series = self.telemetry_series(key)
+            if np.isfinite(series).any():
+                out[key] = [None if not np.isfinite(v) else round(float(v), 6) for v in series[sl]]
         return out
 
 
@@ -123,7 +135,111 @@ def path_metrics(trace: Trace, path, follower_info: dict, overload_thresholds: d
         "duration": duration,
     }
     res.update(interaction_metrics(trace, overload_thresholds))
+    res.update(cart_quality_metrics(trace))
     return res
+
+
+def cart_quality_metrics(trace: Trace, start_s: float = 0.0) -> dict:
+    """Full-rate diagnostics. Missing telemetry stays missing, never zero.
+
+    Bands exclude warmup and the caller's transient window. Geometric peaks cover the entire run,
+    including warmup and failures. Force peaks mean sampled peaks, not continuous-time maxima.
+    """
+    ready = trace.telemetry_series("quality_ready")
+    if not np.isfinite(ready).any():
+        return {}
+    selected = np.isfinite(ready) & (ready > 0.5) & (np.asarray(trace.t) >= start_s)
+    out = {"quality_samples": int(selected.sum())}
+    for name in ("cart_tilt_rad", "robot_tilt_rad", "wheel_lift_m"):
+        values = trace.telemetry_series(name)
+        values = values[np.isfinite(values)]
+        if len(values):
+            out[f"{name}_p95"] = float(np.percentile(values, 95))
+            out[f"{name}_max"] = float(np.max(values))
+    for name in ("cart_fx", "cart_fy", "cart_fz", "cart_mx", "cart_my", "cart_mz"):
+        values = trace.telemetry_series(name)
+        full = values[np.isfinite(values)]
+        if len(full):
+            out[f"{name}_abs_peak"] = float(np.max(np.abs(full)))
+        values = values[selected & np.isfinite(values)]
+        if len(values):
+            out[f"{name}_mean"] = float(np.mean(values))
+            out[f"{name}_std"] = float(np.std(values))
+            out[f"{name}_abs_p95"] = float(np.percentile(np.abs(values), 95))
+    for name in ("cart_vx_band", "cart_vy_band", "cart_wz_band", "cart_fx_band", "cart_fy_band", "cart_mz_band"):
+        values = trace.telemetry_series(name)
+        values = values[selected & np.isfinite(values)]
+        if len(values):
+            out[f"{name}_rms"] = _rms(values)
+    for axis in ("vx", "vy", "wz"):
+        values = np.asarray(getattr(trace, axis), dtype=float)
+        ref = trace.telemetry_series(f"cart_ref_{axis}")
+        mask = selected & np.isfinite(ref) & np.isfinite(values)
+        if mask.any():
+            error = values[mask] - ref[mask]
+            out[f"cart_{axis}_raw_ref_rmse"] = _rms(error)
+            out[f"cart_{axis}_raw_ref_error_std"] = float(np.std(error))
+            out[f"cart_{axis}_mean"] = float(np.mean(values[mask]))
+    return out
+
+
+def disturbance_recovery_metrics(trace: Trace, events: list, cfg: dict) -> dict:
+    """Task recovery after each known disturbance ends, with causal filtering and a dwell window.
+
+    Report unrecovered/interrupted events explicitly; never count missing recovery as zero seconds.
+    Thresholds define an evaluation convention, not a physical safety guarantee.
+    """
+    settings = {"velocity_tolerance": [0.08, 0.06, 0.10], "cross_track_m": 0.10,
+                "hold_s": 0.5, "filter_tau_s": 0.2, **cfg}
+    tol = np.asarray(settings["velocity_tolerance"], dtype=float)
+    if tol.shape != (3,) or not np.isfinite(tol).all() or (tol <= 0).any():
+        raise ValueError("recovery.velocity_tolerance needs three positive finite values")
+    if any(not math.isfinite(float(settings[k])) or settings[k] < 0 for k in ("cross_track_m", "hold_s", "filter_tau_s")):
+        raise ValueError("recovery thresholds must be finite and nonnegative")
+    t = np.asarray(trace.t)
+    if len(t) < 2 or not events:
+        return {"settings": settings, "events": [], "metrics": {"disturbance_recovery_events": len(events)}}
+    velocity = np.column_stack((trace.vx, trace.vy, trace.wz))
+    ref = np.column_stack([trace.telemetry_series(f"cart_ref_{axis}") for axis in ("vx", "vy", "wz")])
+    ref = np.where(np.isfinite(ref), ref, np.asarray(trace.cmd))
+    error = velocity - ref
+    filtered = error.copy()
+    tau = float(settings["filter_tau_s"])
+    for i in range(1, len(t)):
+        alpha = -math.expm1(-(t[i] - t[i-1]) / tau) if tau > 0 else 1.
+        filtered[i] = filtered[i-1] + alpha * (error[i] - filtered[i-1])
+    within = np.isfinite(filtered).all(axis=1) & (np.abs(filtered) <= tol).all(axis=1)
+    if len(trace.cross_track) == len(t):
+        within &= np.abs(trace.cross_track) <= settings["cross_track_m"]
+    rows = []
+    for i, event in enumerate(events):
+        end = float(event["end_t"])
+        next_t = float(events[i+1]["t"]) if i+1 < len(events) else math.inf
+        row = {**event, "recovery_s": None, "confirmed_at_s": None, "status": "not_recovered"}
+        if next_t <= end:
+            row["status"] = "interrupted"
+        else:
+            begin = None
+            left_tolerance = False
+            for j in np.flatnonzero((t >= end) & (t < next_t)):
+                if not within[j] or (trace.failure_t is not None and t[j] >= trace.failure_t):
+                    begin = None
+                    left_tolerance = True
+                    continue
+                if begin is None:
+                    begin = t[j]
+                if t[j] - begin + 1e-9 >= settings["hold_s"]:
+                    row.update(recovery_s=float(begin - end), confirmed_at_s=float(t[j]),
+                               status="recovered" if left_tolerance else "within_tolerance")
+                    break
+            if row["recovery_s"] is None and math.isfinite(next_t):
+                row["status"] = "interrupted"
+        rows.append(row)
+    times = [r["recovery_s"] for r in rows if r["recovery_s"] is not None]
+    return {"settings": settings, "events": rows, "metrics": {
+        "disturbance_recovery_events": len(rows), "disturbance_recovered_frac": len(times) / len(rows),
+        "disturbance_recovery_mean_s": float(np.mean(times)) if times else None,
+        "disturbance_recovery_max_s": max(times) if times else None}}
 
 
 def interaction_metrics(trace: Trace, overload_thresholds: dict | None = None) -> dict:

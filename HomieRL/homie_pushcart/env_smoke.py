@@ -78,6 +78,9 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
     device = args.device
     headless = bool(getattr(launcher, "_headless", True))
     cfg, task_cfg = make_configs(args.num_envs, not args.no_randomization, args.level, args.episode_s)
+    if getattr(args, "quality_profile", None):
+        from .cart_quality import apply_quality_profile
+        apply_quality_profile(task_cfg, args.quality_profile)
     # diagnostic knobs (attribution of numerical blow-ups): each one restores a pre-fix behaviour
     cart_params = None
     if getattr(args, "cart_iters", None):
@@ -129,6 +132,7 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
     kick_timer_prev = env.cart_push_timer.clone()
     last_push_prev = env.last_push_step
     start = time.perf_counter()
+    quality_costs = []
     for step in range(args.steps):
         if not launcher.app.is_running():
             raise RuntimeError("Simulation closed before the env smoke completed")
@@ -147,6 +151,13 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
         for name, tensor in (("obs", obs), ("critic", critic), ("rew", rew)):
             if not torch.isfinite(tensor).all():
                 raise FloatingPointError(f"{name} has non-finite values at step {step}")
+        if env.cart_quality is not None:
+            q = env.cart_quality
+            for value in (q.velocity_band, q.wrench_band, q.ripple_cost, q.wrench_cost,
+                          env.ts.cart_force_w, env.ts.cart_moment_w, env.ts.cart_com_w):
+                if not torch.isfinite(value).all():
+                    raise FloatingPointError(f"cart quality has non-finite values at step {step}")
+            quality_costs.append([float(q.ripple_cost.mean()), float(q.wrench_cost.mean())])
         fast_cart = float(env.ts.cart_speed.max()) > 1.5
         if getattr(args, "force_trace", 0) and (float(env.ts.force_norm_raw.max()) > args.force_trace or fast_cart):
             worst = int(env.ts.force_norm_raw.max(dim=1).values.argmax()) if not fast_cart else int(env.ts.cart_speed.argmax())
@@ -193,6 +204,8 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
     env.episode_length_buf[:] = env.max_episode_length - 1
     obs, critic, rew, done, extras = env.step(torch.zeros(args.num_envs, env.num_hl_actions, device=device))
     assert done.all() and extras["time_outs"].all(), "timeout should reset every env"
+    if env.cart_quality is not None:
+        assert not env.cart_quality.initialized.any(), "quality history must reset with each environment"
     invariants.append(reset_invariants(env, report))
 
     summary = env.termination_summary()
@@ -200,6 +213,10 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
         "result": "PASS" if all(i["pass"] for i in invariants) else "RESET_INVARIANT_FAILED",
         "policy": args.policy, "num_envs": args.num_envs, "steps": args.steps, "level": env.curriculum.level,
         "randomization": not args.no_randomization,
+        "cart_quality": ({**env.cart_quality.metadata(), "profile": getattr(args, "quality_profile", None),
+                          "cost_means_unweighted": np.mean(quality_costs, axis=0).tolist(),
+                          "wrench_source": "physx_incoming_joint_gravity_compensated_proxy"}
+                         if env.cart_quality is not None else None),
         "obs_dims": {"actor": env.num_hl_obs, "critic": env.num_hl_critic_obs, "actions": env.num_hl_actions},
         "reward_per_step_mean": float(np.mean(rew_hist)),
         "reward_terms_per_step": {k: v / args.steps for k, v in term_sums.items()},

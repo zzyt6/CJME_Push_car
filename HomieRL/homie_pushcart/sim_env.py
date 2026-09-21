@@ -363,14 +363,16 @@ class PushCartSimEnv(HomieIsaacLabEnv):
         return pose[:, :3], pose[:, 3:7], vel[:, :3], vel[:, 3:6]
 
     def grasp_wrench(self):
-        """Force / torque each hand applies to the cart, from PhysX's incoming joint force at the palm links.
+        """Legacy gravity-compensated proxy for each hand's cart force / torque.
 
         PhysX reports, per link, the spatial force the parent transmits through the incoming articulation
-        joint, in the child link frame at the link origin. For a palm the only other loads are the grasp
-        constraint and the weight of the palm + fingers, so
+        joint, in its joint frame. This conversion assumes that frame/origin coincide with the palm's.
+        Neglecting hand-subtree acceleration and other external loads, the quasi-static estimate is
             F_hand->cart = F_incoming + m_hand * g          (world frame, after rotating F_incoming)
         Returns (force_w [N,2,3], torque_w [N,2,3], force_palm [N,2,3]); torque is about the palm origin
-        and omits the small gravity moment of the finger subtree. Without a cart the result is ~0.
+        and omits the gravity moment of the finger subtree and dynamic inertia compensation. Without
+        a cart it should be near zero at rest, not necessarily during hand motion. V3.1 labels this
+        as a proxy; MuJoCo's independently recovered constraint wrench has a different measurement source.
         """
         import warp as wp
         from homie_isaaclab.math_utils import quat_apply
@@ -383,6 +385,24 @@ class PushCartSimEnv(HomieIsaacLabEnv):
         force_w = force_w + gravity
         force_palm = torch.stack([quat_apply(self._quat_conj(palm_quat[:, i]), force_w[:, i]) for i in range(2)], 1)
         return force_w, torque_w, force_palm
+
+    def cart_com_world(self):
+        """Mass-weighted COM of the entire cart articulation, including payload and casters."""
+        masses = self.cart.data.body_mass.torch
+        positions = self.cart.data.body_com_pose_w.torch[..., :3]
+        return (positions * masses.unsqueeze(-1)).sum(dim=1) / masses.sum(dim=1, keepdim=True)
+
+    def cart_hand_wrench(self, force_w, torque_w):
+        """Aggregate the existing palm-referenced load proxy about the cart assembly COM.
+
+        This retains grasp_wrench's gravity-only compensation and frame assumptions; it is NOT
+        an independently measured constraint wrench. Raw inputs are used before reward clipping.
+        """
+        from .cart_quality import resultant_wrench
+        com = self.cart_com_world()
+        points = self.rigid_body_states[:, self.palm_body_ids, :3]
+        force, moment = resultant_wrench(force_w, torque_w, points, com)
+        return force, moment, com
 
     @staticmethod
     def _quat_conj(q):

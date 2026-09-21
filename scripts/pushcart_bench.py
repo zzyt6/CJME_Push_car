@@ -30,6 +30,7 @@ def _common(sp):
     sp.add_argument("--port", type=int, default=8080)
     sp.add_argument("--speed", type=float, default=1.0, help="with --view: real-time multiplier (0 = as fast as possible)")
     sp.add_argument("--caster_deg", type=float, help="initial caster angle [deg]; default from yaml")
+    sp.add_argument("--trace_stride", type=int, help="saved trace stride; 1 keeps full control-rate force/ripple data")
 
 
 def main(argv=None) -> int:
@@ -70,6 +71,10 @@ def main(argv=None) -> int:
     from pushcart_bench.config_io import load_config
     from pushcart_bench import experiments
     cfg = load_config(args.config)
+    if args.trace_stride is not None:
+        if args.trace_stride < 1:
+            parser.error("--trace_stride must be >= 1")
+        cfg["trace_stride"] = args.trace_stride
     out = {"path": experiments.exp_path, "step": experiments.exp_step, "robust": experiments.exp_robust}[args.command](args, cfg)
     print(f"[bench] done -> {out}", flush=True)
     if getattr(args, "view", False) and args.command != "path":

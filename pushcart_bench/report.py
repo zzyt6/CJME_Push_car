@@ -20,6 +20,15 @@ STEP_COLUMNS = [("rise_time", "上升 s", 2), ("settling_time", "整定 s", 2), 
                 ("stopping_distance", "停止距离 m", 2), ("drift_distance", "漂移 m", 2), ("grasp_p95", "抓握 p95 N", 0)]
 
 
+QUALITY_COLUMNS = [("cart_vx_band_rms", "vx 带限 RMS m/s", 3), ("cart_wz_band_rms", "wz 带限 RMS rad/s", 3),
+                   ("cart_fx_mean", "净推力均值 N", 1), ("cart_mz_abs_p95", "偏航力矩 p95 N·m", 2),
+                   ("cart_mz_band_rms", "力矩带限 RMS N·m", 2), ("cart_tilt_rad_max", "车倾角 max rad", 3),
+                   ("wheel_lift_m_max", "轮离地 max m", 3), ("robot_tilt_rad_max", "机器人倾角 max rad", 3)]
+RECOVERY_COLUMNS = [("disturbance_recovery_events", "扰动次数", 0), ("disturbance_recovered_frac", "恢复比例", 2),
+                    ("disturbance_recovery_mean_s", "已恢复事件平均恢复 s", 2),
+                    ("disturbance_recovery_max_s", "已恢复事件最大恢复 s", 2)]
+
+
 def load_runs(out_dir: Path) -> tuple[dict, list]:
     data = json.loads((Path(out_dir) / "runs.json").read_text(encoding="utf-8"))
     return data.get("meta", {}), data.get("runs", [])
@@ -35,6 +44,10 @@ def _group(runs, key):
 ALL_RUN_METRICS = {"success", "min_goal_dist", "time_enter", "grasp_p95", "lateral_p95", "overload_frac",
                    "cmd_clip_frac", "arm_clip_frac", "arm_target_std",
                    "rise_time", "settling_time", "overshoot", "ss_error", "post_rmse", "ripple_rms", "ss_std", "stopping_distance", "drift_distance"}
+
+
+ALL_RUN_METRICS.update(column[0] for column in QUALITY_COLUMNS)
+ALL_RUN_METRICS.update(column[0] for column in RECOVERY_COLUMNS)
 
 
 def _cell(runs, metric, digits):
@@ -214,6 +227,18 @@ def write_report(out_dir: Path) -> Path:
             figures = _fig_robust(runs, out_dir)
     except Exception as exc:  # figures must never block the tables
         lines += [f"_图表生成失败: {exc!r}_", ""]
+    if any("quality_samples" in r["metrics"] for r in runs):
+        lines += ["## 车侧施力与运动质量", "",
+                  "带限量采用各策略描述中的滤波配置；它不替代上方原始纹波 RMS。"
+                  "力矩参考点为整车质心。几何峰值包含初始阶段与失败运行；其余量排除滤波预热，阶跃另排除命令瞬态。", "",
+                  _table(runs, lambda r: f"{r.get('path', r.get('step', {}).get('name', ''))} @ {r['condition']['payload_kg']:g} kg"
+                         + (f" {r['factor']}={r['factor_value']}" if r.get("factor") else ""), "工况", QUALITY_COLUMNS), ""]
+    if any(r.get("recovery") for r in runs):
+        lines += ["## 车侧扰动后的任务恢复", "",
+                  "恢复时间从扰动结束到首次进入并持续满足阈值的区间起点计算；"
+                  "within_tolerance 表示观察窗口开始即保持在容差内，不表示没有运动波动。"
+                  "平均时间只统计满足恢复条件的事件，未恢复和被后续扰动打断的事件保留在 runs.json，不能按 0 秒处理。", "",
+                  _table(runs, lambda r: f"{r.get('factor', '')}={r.get('factor_value', '')}", "扰动", RECOVERY_COLUMNS), ""]
     if figures:
         lines += ["## 图", ""] + [f"![{f}]({f})" for f in figures] + [""]
     path = out_dir / "report.md"

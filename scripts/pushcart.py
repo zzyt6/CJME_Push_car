@@ -110,7 +110,9 @@ def main(argv=None):
     export.add_argument("--output", type=Path, help="default: <checkpoint dir>/exported")
     export.add_argument("--level", type=int, default=17, help="curriculum level whose correction scale is documented")
 
-    sub.add_parser("train", help="phase B training via NVIDIA's rsl_rl train.py (extra args forwarded, e.g. --num_envs 4096 --headless --level 0)")
+    train_parser = sub.add_parser("train", help="phase B training via NVIDIA's rsl_rl train.py (extra args forwarded, e.g. --num_envs 4096 --headless --level 0)")
+    train_parser.add_argument("--quality_profile", choices=["diagnostic", "ripple", "wrench", "combined"],
+                              help="V3.1 experiment: diagnostics only, cart velocity ripple, cart wrench oscillation, or both")
     sub.add_parser("play", help="play a high-level checkpoint via NVIDIA's rsl_rl play.py (--checkpoint <run>/model_N.pt)")
 
     ev = sub.add_parser("eval", help="Isaac Lab: fixed scenario suite for a high-level checkpoint (or passthrough baseline without --checkpoint)")
@@ -141,6 +143,8 @@ def main(argv=None):
     envsmoke.add_argument("--no_force_clip", action="store_true", help="diagnostic: no clipping of grasp forces in rewards")
     envsmoke.add_argument("--no_stall", action="store_true", help="diagnostic: disable the single-wheel stall disturbance")
     envsmoke.add_argument("--no_kick", action="store_true", help="diagnostic: disable the cart velocity kick disturbance")
+    envsmoke.add_argument("--quality_profile", choices=["diagnostic", "ripple", "wrench", "combined"],
+                          help="exercise V3.1 cart-quality filters and rewards")
 
     smoke = sub.add_parser("smoke", help="headless HOMIE-driven check of the robot / cart scene (Isaac Lab)")
     smoke.add_argument("--mode", choices=["robot", "cart"], default="cart")
@@ -167,6 +171,8 @@ def main(argv=None):
     if args.command in ("train", "play"):
         # NVIDIA's entrypoints run in a clean child interpreter; nothing from Kit may be imported here.
         from homie_pushcart.training import play as play_main, train as train_main
+        if args.command == "train" and args.quality_profile:
+            extra = ["--quality_profile", args.quality_profile, *extra]
         return train_main(extra) if args.command == "train" else play_main(extra)
 
     if args.command == "pose" and args.action == "import":

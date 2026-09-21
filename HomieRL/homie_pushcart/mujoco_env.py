@@ -161,6 +161,34 @@ class MujocoHomieEnv:
         """
         return {k.replace("grasp_", ""): -np.asarray(v[:3], dtype=float) for k, v in self._weld_rows().items()}
 
+    def grasp_cart_wrenches(self) -> dict[str, np.ndarray]:
+        """Per-hand [Fx,Fy,Fz,Mx,My,Mz] on the cart, world axes, about its assembly COM.
+
+        Weld rotational efc_force rows are not Cartesian torques. Map each weld through J.T
+        to the cart free-joint generalized force, then solve the Cartesian Jacobian transpose.
+        This includes anchor lever arms, quaternion residual scaling and weld torques correctly.
+        Works with both dense and sparse constraint Jacobians (mj_mulJacTVec).
+        https://mujoco.readthedocs.io/en/stable/APIreference/APIfunctions.html#mj-muljactvec
+        """
+        if self.cart_id < 0:
+            return {}
+        m, d = self.model, self.data
+        jacp, jacr = np.zeros((3, m.nv)), np.zeros((3, m.nv))
+        mujoco.mj_jac(m, d, jacp, jacr, d.subtree_com[self.cart_id], self.cart_id)
+        adr = int(m.joint("cart_free").dofadr[0])
+        mapping = np.vstack((jacp[:, adr:adr + 6], jacr[:, adr:adr + 6])).T
+        out = {}
+        for side in ("left", "right"):
+            eq = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_EQUALITY, f"grasp_{side}")
+            if eq < 0:
+                continue
+            rows = (d.efc_type == mujoco.mjtConstraint.mjCNSTR_EQUALITY) & (d.efc_id == eq)
+            selected = np.where(rows, d.efc_force, 0.0)
+            generalized = np.zeros(m.nv)
+            mujoco.mj_mulJacTVec(m, d, generalized, selected)
+            out[side] = np.linalg.solve(mapping, generalized[adr:adr + 6])
+        return out
+
     # ------------------------------------------------------------------ control
     def set_command(self, vx: float, vy: float, wz: float):
         self.commands[:3] = (vx, vy, wz)
