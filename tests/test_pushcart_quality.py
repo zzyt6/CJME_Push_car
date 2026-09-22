@@ -15,7 +15,8 @@ for path in (ROOT, ROOT / "HomieRL", ROOT / "HomieRL/rsl_rl"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from homie_pushcart.cart_quality import CartQualityTracker, apply_quality_profile, resultant_wrench, rotate_planar
+from homie_pushcart.cart_quality import (CartQualityTracker, QUALITY_REWARD_NAMES, apply_quality_profile,
+                                        resultant_wrench, rotate_planar)
 from homie_pushcart.task_config import PushCartTaskCfg, task_cfg_from_run, num_actor_obs, num_critic_obs
 from pushcart_bench.metrics import Trace, cart_quality_metrics, disturbance_recovery_metrics
 
@@ -79,6 +80,63 @@ class QualityFilterTests(unittest.TestCase):
             q.update(v, v, torch.zeros(1, dtype=torch.float64), f, m)
         self.assertEqual(float(q.ripple_cost[0]), 0.)
         self.assertEqual(float(q.wrench_cost[0]), 0.)
+        self.assertEqual(float(q.response_cost[0]), 0.)
+
+    def test_linear_and_yaw_costs_are_independent(self):
+        zero = torch.zeros(1, 3, dtype=torch.float64)
+        for axis in range(3):
+            q = self.tracker()
+            totals = np.zeros(2)
+            for t in np.arange(0, 3, .02):
+                velocity = zero.clone()
+                velocity[0, axis] = .2 * math.sin(2 * math.pi * 2 * t)
+                q.update(velocity, zero, torch.zeros(1), zero, zero)
+                totals += [float(q.lin_ripple_cost[0]), float(q.yaw_ripple_cost[0])]
+            self.assertGreater(totals[int(axis == 2)], 1.)
+            self.assertEqual(totals[int(axis != 2)], 0.)
+
+    def test_response_penalizes_constant_bias_during_ripple_warmup(self):
+        cfg = PushCartTaskCfg().quality  # 1 s ripple warmup must not hide the response
+        q = CartQualityTracker(cfg, .02, 1, dtype=torch.float64)
+        zero = torch.zeros(1, 3, dtype=torch.float64)
+        reference = torch.tensor([[.1, 0., 0.]], dtype=torch.float64)
+        q.update(zero, reference, torch.zeros(1), zero, zero)
+        self.assertFalse(bool(q.ready[0]))
+        self.assertTrue(bool(q.response_ready[0]))
+        self.assertAlmostEqual(float(q.response_cost[0]), .5 / 3)
+        for _ in range(100):
+            q.update(zero, reference, torch.zeros(1), zero, zero)
+        self.assertEqual(float(q.ripple_cost[0]), 0.)
+        self.assertAlmostEqual(float(q.response_cost[0]), .5 / 3)
+
+    def test_response_prefers_timely_tracking_over_lag_or_standing_still(self):
+        def total_cost(lag):
+            q = self.tracker()
+            zero = torch.zeros(1, 3, dtype=torch.float64)
+            total = 0.
+            for t in np.arange(0, 3., .02):
+                ref = zero.clone()
+                ref[0, 0] = .3 * (1 - math.exp(-t / .4))
+                velocity = zero.clone()
+                velocity[0, 0] = .3 * (1 - math.exp(-max(t - lag, 0) / .4))
+                q.update(velocity, ref, torch.zeros(1), zero, zero)
+                total += float(q.response_cost[0]) * .02
+            return total
+        self.assertLess(total_cost(.1), total_cost(.5))
+        self.assertLess(total_cost(.5), total_cost(10.))
+
+    def test_response_penalizes_overshoot_and_signed_turn_error_equally(self):
+        values = []
+        for error in (-.15, .15):
+            q = self.tracker()
+            zero = torch.zeros(1, 3, dtype=torch.float64)
+            ref = torch.tensor([[0., 0., .3]], dtype=torch.float64)
+            velocity = ref.clone()
+            velocity[0, 2] += error
+            q.update(velocity, ref, torch.zeros(1), zero, zero)
+            values.append(float(q.response_cost[0]))
+        self.assertAlmostEqual(values[0], values[1])
+        self.assertGreater(values[0], 0.)
 
     def test_partial_reset_seeds_only_reset_environment(self):
         q = self.tracker(2)
@@ -86,11 +144,16 @@ class QualityFilterTests(unittest.TestCase):
         yaw = torch.zeros(2, dtype=torch.float64)
         q.update(zeros, zeros, yaw, zeros, zeros)
         q.update(zeros + 1, zeros, yaw, zeros + 10, zeros)
+        previous_response = q.response_error_w[1].clone()
         q.reset(torch.tensor([0]))
+        self.assertFalse(bool(q.response_ready[0]))
+        torch.testing.assert_close(q.response_error_w[1], previous_response)
         q.update(zeros + 2, zeros, yaw, zeros + 30, zeros)
         torch.testing.assert_close(q.velocity_band[0], zeros[0])
         self.assertGreater(float(q.velocity_band[1].norm()), .01)
         self.assertEqual(q.steps.tolist(), [1, 3])
+        torch.testing.assert_close(q.response_error[0], zeros[0] + 2)
+        self.assertLess(float(q.response_error[1, 0]), 2.)
 
     def test_world_filter_is_invariant_to_heading_relabel(self):
         q = self.tracker()
@@ -103,6 +166,7 @@ class QualityFilterTests(unittest.TestCase):
             q.update(error_cart, zero, yaw, force, zero)
         torch.testing.assert_close(q.velocity_band, zero, atol=1e-12, rtol=0)
         torch.testing.assert_close(q.wrench_band, zero, atol=1e-12, rtol=0)
+        torch.testing.assert_close(rotate_planar(q.response_error, yaw), error_world, atol=1e-12, rtol=0)
 
     def test_frequency_response_rejects_dc_and_attenuates_fast_noise(self):
         def gain(freq, dt=.02):
@@ -129,18 +193,28 @@ class QualityFilterTests(unittest.TestCase):
         q.update(zero, zero, yaw, zero, zero)
         q.update(zero + float('nan'), zero, yaw, zero, zero)
         self.assertFalse(bool(q.ready[0]))
+        self.assertFalse(bool(q.response_ready[0]))
+        self.assertEqual(float(q.response_cost[0]), 0.)
         q.update(zero, zero, yaw + float('nan'), zero, zero)
         self.assertTrue(torch.isfinite(q.velocity_band).all())
         q.update(zero + 1e5, zero, yaw, zero + 1e5, zero + 1e5)
         self.assertTrue(torch.isfinite(q.velocity_band).all())
         self.assertLessEqual(float(q.ripple_cost[0]), q.cfg.cost_cap)
         self.assertLessEqual(float(q.wrench_cost[0]), q.cfg.cost_cap)
+        for cost in (q.lin_ripple_cost, q.yaw_ripple_cost, q.response_cost):
+            self.assertTrue(torch.isfinite(cost).all())
+            self.assertLessEqual(float(cost[0]), q.cfg.cost_cap)
 
     def test_invalid_filter_fails_early(self):
         cfg = PushCartTaskCfg().quality
         cfg.high_hz = 25.
         with self.assertRaises(ValueError):
             CartQualityTracker(cfg, .02, 1)
+        for bad_tau in (0., -.1, float('nan')):
+            cfg = PushCartTaskCfg().quality
+            cfg.response_filter_tau_s = bad_tau
+            with self.assertRaises(ValueError):
+                CartQualityTracker(cfg, .02, 1)
 
 
 class QualityIntegrationTests(unittest.TestCase):
@@ -149,7 +223,11 @@ class QualityIntegrationTests(unittest.TestCase):
         new = apply_quality_profile(PushCartTaskCfg(), "combined")
         self.assertFalse(old.quality.enabled)
         self.assertEqual(old.rewards.scales.cart_ripple, 0.)
-        self.assertLess(new.rewards.scales.cart_ripple, 0.)
+        self.assertEqual(new.rewards.scales.cart_ripple, 0.)
+        self.assertEqual(new.rewards.scales.cart_lin_ripple, -.10)
+        self.assertEqual(new.rewards.scales.cart_yaw_ripple, -.15)
+        self.assertEqual(new.rewards.scales.cart_response_error, -.10)
+        self.assertEqual(new.rewards.scales.cart_wrench_osc, -.02)
         self.assertEqual((num_actor_obs(new), num_critic_obs(new)), (num_actor_obs(old), num_critic_obs(old)))
         self.assertEqual(new.env.num_hl_actions, 18)
         with tempfile.TemporaryDirectory() as td:
@@ -159,6 +237,17 @@ class QualityIntegrationTests(unittest.TestCase):
             restored = task_cfg_from_run(td, verbose=False)
             self.assertFalse(restored.quality.enabled)
             self.assertEqual(restored.rewards.scales.cart_wrench_osc, 0.)
+            (p / 'env.yaml').write_text('task:\n  quality:\n    enabled: true\n  rewards:\n    scales:\n      cart_ripple: -0.05\n      cart_wrench_osc: -0.02\n', encoding='utf-8')
+            restored = task_cfg_from_run(td, verbose=False)
+            self.assertEqual(restored.rewards.scales.cart_ripple, -.05)
+            for name in ('cart_lin_ripple', 'cart_yaw_ripple', 'cart_response_error'):
+                self.assertEqual(getattr(restored.rewards.scales, name), 0.)
+
+    def test_switching_profiles_clears_inactive_costs(self):
+        cfg = apply_quality_profile(PushCartTaskCfg(), 'combined')
+        apply_quality_profile(cfg, 'diagnostic')
+        for name in QUALITY_REWARD_NAMES:
+            self.assertEqual(getattr(cfg.rewards.scales, name), 0.)
 
     def test_training_profile_is_forwarded_without_changing_task_rewards(self):
         from homie_pushcart import training
@@ -169,6 +258,27 @@ class QualityIntegrationTests(unittest.TestCase):
         self.assertIn('env.task.rewards.scales.cart_ripple=-0.05', args)
         self.assertIn('env.task.rewards.scales.cart_wrench_osc=0.0', args)
         self.assertFalse(any('track_cart' in a for a in args))
+        with patch.object(training, '_lab_scripts', return_value=Path('official')), patch.object(training, '_run', return_value=0) as run:
+            training.train(['--quality_profile', 'combined', '--num_envs', '16', '--headless'])
+        args = run.call_args.args[1]
+        self.assertIn('env.task.rewards.scales.cart_ripple=0.0', args)
+        self.assertIn('env.task.rewards.scales.cart_lin_ripple=-0.1', args)
+        self.assertIn('env.task.rewards.scales.cart_yaw_ripple=-0.15', args)
+        self.assertIn('env.task.rewards.scales.cart_response_error=-0.1', args)
+
+    def test_response_metrics_include_valid_first_second_and_exclude_invalid_samples(self):
+        trace = Trace()
+        for i in range(3):
+            trace.append(i * .02, [0, 0, 0], [0, 0, 0], [.3, 0, 0], telemetry={
+                'quality_ready': False, 'cart_response_ready': i != 1,
+                'cart_response_error_vx': .1 if i != 1 else 100.,
+                'cart_response_error_cost': .2 if i != 1 else 100.})
+        metrics = cart_quality_metrics(trace)
+        self.assertEqual(metrics['quality_samples'], 0)
+        self.assertAlmostEqual(metrics['cart_response_error_vx_rmse'], .1)
+        self.assertAlmostEqual(metrics['cart_response_error_cost_mean'], .2)
+        self.assertNotIn('cart_response_error_wz_rmse', metrics)
+        self.assertEqual(len(trace.decimated(1)['cart_response_error_vx']), 3)
 
     def test_metrics_exclude_transient_but_keep_failure_peak(self):
         trace = Trace()

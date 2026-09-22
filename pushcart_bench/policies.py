@@ -135,10 +135,16 @@ class CartPolicyBase:
         q = self.runner.quality
         out.update(dict(zip(("cart_vx_band", "cart_vy_band", "cart_wz_band"), q.velocity_band[0].tolist())))
         out.update(dict(zip(("cart_fx_band", "cart_fy_band", "cart_mz_band"), q.wrench_band[0].tolist())))
+        out.update(dict(zip(("cart_response_error_vx", "cart_response_error_vy", "cart_response_error_wz"),
+                            q.response_error[0].tolist())))
         out.update(dict(zip(("cart_ref_vx", "cart_ref_vy", "cart_ref_wz"), self.runner.cmd_ref.tolist())))
         out.update({"cart_tilt_rad": float(np.arcsin(np.clip(ts["cart_tilt"], 0, 1))),
                     "robot_tilt_rad": ts["robot_tilt_rad"], "wheel_lift_m": ts["wheel_lift_m"],
                     "quality_ready": bool(q.ready[0]), "cart_ripple_cost": float(q.ripple_cost[0]),
+                    "cart_lin_ripple_cost": float(q.lin_ripple_cost[0]),
+                    "cart_yaw_ripple_cost": float(q.yaw_ripple_cost[0]),
+                    "cart_response_ready": bool(q.response_ready[0]),
+                    "cart_response_error_cost": float(q.response_cost[0]),
                     "cart_wrench_osc_cost": float(q.wrench_cost[0])})
         for side, value in ts["hand_cart_wrenches"].items():
             out[f"cart_mz_{side}"] = float(value[5])

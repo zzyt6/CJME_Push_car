@@ -93,6 +93,9 @@ class PushCartTaskCfg(BaseConfig):
             force_rate = -0.2
             # V3.1 experimental terms: opt in with train --quality_profile; old runs stay unchanged.
             cart_ripple = 0.0
+            cart_lin_ripple = 0.0                   # independent mean of vx/vy band costs
+            cart_yaw_ripple = 0.0                   # independent wz band cost
+            cart_response_error = 0.0               # short-filtered tracking error, including transients
             cart_wrench_osc = 0.0
             wrist_saturation = -1.0
             grasp_pull_up = -1.0
@@ -144,6 +147,8 @@ class PushCartTaskCfg(BaseConfig):
         wrench_deadband = [1.0, 1.0, 0.2]
         wrench_input_clip = [800.0, 800.0, 200.0]  # reward-filter input only; raw telemetry stays raw
         cost_cap = 4.0                             # caps new penalties; tracking/progress remains primary
+        response_filter_tau_s = 0.08               # same causal low-pass on velocity and reference
+        response_scale = [0.10, 0.10, 0.15]        # m/s, m/s, rad/s; no deadband for steady bias
 
     class termination:
         # finger-borne grasp directions only (cart frame): pulling the bar, lifting it, sliding along it, twisting

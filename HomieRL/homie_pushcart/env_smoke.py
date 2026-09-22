@@ -154,10 +154,12 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
         if env.cart_quality is not None:
             q = env.cart_quality
             for value in (q.velocity_band, q.wrench_band, q.ripple_cost, q.wrench_cost,
+                          q.lin_ripple_cost, q.yaw_ripple_cost, q.response_error, q.response_cost,
                           env.ts.cart_force_w, env.ts.cart_moment_w, env.ts.cart_com_w):
                 if not torch.isfinite(value).all():
                     raise FloatingPointError(f"cart quality has non-finite values at step {step}")
-            quality_costs.append([float(q.ripple_cost.mean()), float(q.wrench_cost.mean())])
+            quality_costs.append([float(cost.mean()) for cost in
+                                  (q.ripple_cost, q.lin_ripple_cost, q.yaw_ripple_cost, q.response_cost, q.wrench_cost)])
         fast_cart = float(env.ts.cart_speed.max()) > 1.5
         if getattr(args, "force_trace", 0) and (float(env.ts.force_norm_raw.max()) > args.force_trace or fast_cart):
             worst = int(env.ts.force_norm_raw.max(dim=1).values.argmax()) if not fast_cart else int(env.ts.cart_speed.argmax())
@@ -214,6 +216,8 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
         "policy": args.policy, "num_envs": args.num_envs, "steps": args.steps, "level": env.curriculum.level,
         "randomization": not args.no_randomization,
         "cart_quality": ({**env.cart_quality.metadata(), "profile": getattr(args, "quality_profile", None),
+                          "cost_names": ["cart_ripple", "cart_lin_ripple", "cart_yaw_ripple",
+                                         "cart_response_error", "cart_wrench_osc"],
                           "cost_means_unweighted": np.mean(quality_costs, axis=0).tolist(),
                           "wrench_source": "physx_incoming_joint_gravity_compensated_proxy"}
                          if env.cart_quality is not None else None),

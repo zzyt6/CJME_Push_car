@@ -12,6 +12,8 @@ CART_QUALITY_SIGNALS = (
     "cart_vx_band", "cart_vy_band", "cart_wz_band", "cart_fx_band", "cart_fy_band", "cart_mz_band",
     "cart_ref_vx", "cart_ref_vy", "cart_ref_wz", "cart_tilt_rad", "robot_tilt_rad", "wheel_lift_m",
     "quality_ready", "cart_ripple_cost", "cart_wrench_osc_cost",
+    "cart_lin_ripple_cost", "cart_yaw_ripple_cost", "cart_response_ready", "cart_response_error_cost",
+    "cart_response_error_vx", "cart_response_error_vy", "cart_response_error_wz",
 )
 
 
@@ -171,6 +173,22 @@ def cart_quality_metrics(trace: Trace, start_s: float = 0.0) -> dict:
         values = values[selected & np.isfinite(values)]
         if len(values):
             out[f"{name}_rms"] = _rms(values)
+    for name in ("cart_ripple_cost", "cart_lin_ripple_cost", "cart_yaw_ripple_cost", "cart_wrench_osc_cost"):
+        values = trace.telemetry_series(name)
+        values = values[selected & np.isfinite(values)]
+        if len(values):
+            out[f"{name}_mean"] = float(np.mean(values))
+    response_ready = trace.telemetry_series("cart_response_ready")
+    response_selected = np.isfinite(response_ready) & (response_ready > .5) & (np.asarray(trace.t) >= start_s)
+    for axis in ("vx", "vy", "wz"):
+        values = trace.telemetry_series(f"cart_response_error_{axis}")
+        values = values[response_selected & np.isfinite(values)]
+        if len(values):
+            out[f"cart_response_error_{axis}_rmse"] = _rms(values)
+    response_cost = trace.telemetry_series("cart_response_error_cost")
+    response_cost = response_cost[response_selected & np.isfinite(response_cost)]
+    if len(response_cost):
+        out["cart_response_error_cost_mean"] = float(np.mean(response_cost))
     for axis in ("vx", "vy", "wz"):
         values = np.asarray(getattr(trace, axis), dtype=float)
         ref = trace.telemetry_series(f"cart_ref_{axis}")

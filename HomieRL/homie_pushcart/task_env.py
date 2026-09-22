@@ -28,7 +28,7 @@ import warp as wp
 from homie_isaaclab.math_utils import euler_from_quaternion, quat_apply, quat_mul, quat_rotate_inverse, torch_rand_float
 
 from .curriculum import CurriculumTracker, LevelParams
-from .cart_quality import CartQualityTracker, rotate_planar
+from .cart_quality import CartQualityTracker, QUALITY_REWARD_NAMES, rotate_planar
 from .lowlevel import HimLowLevelPolicy, frozen_checkpoint
 from .paths import HOMIE_JOINTS, HOMIE_RUN_DIR, ROOT
 from .sim_env import PushCartSimEnv
@@ -175,10 +175,11 @@ class PushCartEnv(PushCartSimEnv):
         self.cart_quality = None
         if self.task_cfg.quality.enabled:
             self.cart_quality = CartQualityTracker(self.task_cfg.quality, self.dt, N, dev)
-        elif any(getattr(self.task_cfg.rewards.scales, key) != 0 for key in ("cart_ripple", "cart_wrench_osc")):
+        elif any(getattr(self.task_cfg.rewards.scales, key) != 0 for key in QUALITY_REWARD_NAMES):
             raise ValueError("cart quality rewards require task.quality.enabled=true")
         self.quality_sums = {name: z(N, 3) for name in ("velocity_band2", "wrench_band2", "raw_error2", "task_wrench")}
         self.quality_steps = z(N)
+        self.response_error2_sum, self.response_steps = z(N, 3), z(N)
         self.quality_peaks = {name: z(N) for name in ("force_N", "moment_Nm", "cart_tilt_rad", "robot_tilt_rad")}
 
     def _apply_level(self, params: LevelParams):
@@ -343,6 +344,8 @@ class PushCartEnv(PushCartSimEnv):
         self.sat_steps += (self.hl_raw.abs() > 1.0).float().mean(dim=1)
         q = self.cart_quality
         if q is not None:
+            self.response_error2_sum += q.response_error.square() * q.response_ready.float().unsqueeze(1)
+            self.response_steps += q.response_ready.float()
             valid = q.ready.float().unsqueeze(1)
             self.quality_steps += q.ready.float()
             self.quality_sums["velocity_band2"] += q.velocity_band.square() * valid
@@ -435,6 +438,15 @@ class PushCartEnv(PushCartSimEnv):
 
     def _reward_cart_ripple(self):
         return self.cart_quality.ripple_cost * self._quality_reward_ramp()
+
+    def _reward_cart_lin_ripple(self):
+        return self.cart_quality.lin_ripple_cost * self._quality_reward_ramp()
+
+    def _reward_cart_yaw_ripple(self):
+        return self.cart_quality.yaw_ripple_cost * self._quality_reward_ramp()
+
+    def _reward_cart_response_error(self):
+        return self.cart_quality.response_cost * self._quality_reward_ramp()
 
     def _reward_cart_wrench_osc(self):
         return self.cart_quality.wrench_cost * self._quality_reward_ramp()
@@ -544,6 +556,12 @@ class PushCartEnv(PushCartSimEnv):
         ep["upper_dq_turning_rad"] = (per_env * turned).sum() / turned.sum().clamp_min(1.)
         ep["rel_yaw_abs_rad"] = (self.rel_yaw_abs_sum[env_ids] / steps).mean()
         if self.cart_quality is not None:
+            response_counts = self.response_steps[env_ids]
+            response_valid = (response_counts > 0).float()
+            response_rmse = (self.response_error2_sum[env_ids] / response_counts.clamp_min(1).unsqueeze(1)).sqrt()
+            for i, axis in enumerate(("vx", "vy", "wz")):
+                ep[f"quality_response_rmse_{axis}"] = (
+                    (response_rmse[:, i] * response_valid).sum() / response_valid.sum().clamp_min(1))
             counts = self.quality_steps[env_ids]
             valid = (counts > 0).float()
             for name, values in self.quality_sums.items():
@@ -673,6 +691,8 @@ class PushCartEnv(PushCartSimEnv):
         if self.cart_quality is not None:
             self.cart_quality.reset(env_ids)
         self.quality_steps[env_ids] = 0.
+        self.response_steps[env_ids] = 0.
+        self.response_error2_sum[env_ids] = 0.
         for buf in (*self.quality_sums.values(), *self.quality_peaks.values()):
             buf[env_ids] = 0.
         noise = lp.obs_noise_frac

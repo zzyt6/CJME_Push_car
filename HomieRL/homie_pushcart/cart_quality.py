@@ -12,15 +12,20 @@ import torch
 
 
 QUALITY_PROFILES = ("diagnostic", "ripple", "wrench", "combined")
+QUALITY_REWARD_NAMES = ("cart_ripple", "cart_lin_ripple", "cart_yaw_ripple",
+                        "cart_response_error", "cart_wrench_osc")
 
 
 def quality_profile_overrides(profile: str) -> dict:
-    """Opt-in experimental additions; existing V3 reward weights are untouched."""
+    """Combined uses independent speed costs; single-term profiles retain V3.1 settings."""
     if profile not in QUALITY_PROFILES:
         raise ValueError(f"Unknown quality profile {profile!r}; choose {QUALITY_PROFILES}")
     return {
         "quality.enabled": True,
-        "rewards.scales.cart_ripple": -0.05 if profile in ("ripple", "combined") else 0.0,
+        "rewards.scales.cart_ripple": -0.05 if profile == "ripple" else 0.0,
+        "rewards.scales.cart_lin_ripple": -0.10 if profile == "combined" else 0.0,
+        "rewards.scales.cart_yaw_ripple": -0.15 if profile == "combined" else 0.0,
+        "rewards.scales.cart_response_error": -0.10 if profile == "combined" else 0.0,
         "rewards.scales.cart_wrench_osc": -0.02 if profile in ("wrench", "combined") else 0.0,
     }
 
@@ -61,12 +66,18 @@ class CartQualityTracker:
                 raise ValueError(f"quality.{name} must be finite and nonnegative (cap > 0)")
         self.alpha_fast = -math.expm1(-2 * math.pi * hi * dt)
         self.alpha_slow = -math.expm1(-2 * math.pi * lo * dt)
+        response_tau = float(cfg.response_filter_tau_s)
+        if not math.isfinite(response_tau) or response_tau <= 0:
+            raise ValueError("quality.response_filter_tau_s must be finite and positive")
+        self.alpha_response = -math.expm1(-dt / response_tau)
         def vector(name, positive):
             values = list(getattr(cfg, name))
             if len(values) != 3 or any(not math.isfinite(v) or (v <= 0 if positive else v < 0) for v in values):
                 raise ValueError(f"quality.{name} requires three finite {'positive' if positive else 'nonnegative'} values")
             return torch.tensor(values, device=device, dtype=dtype)
         self.velocity_scale = vector("velocity_scale", True)
+        self.response_scale = vector("response_scale", True)
+        self.response_deadband = torch.zeros_like(self.response_scale)
         self.wrench_scale = vector("wrench_scale", True)
         self.velocity_deadband = vector("velocity_deadband", False)
         self.wrench_deadband = vector("wrench_deadband", False)
@@ -80,20 +91,29 @@ class CartQualityTracker:
         self.wrench_band = torch.zeros_like(self.velocity_band)
         self.ripple_cost = torch.zeros(num_envs, device=device, dtype=dtype)
         self.wrench_cost = torch.zeros_like(self.ripple_cost)
+        self.lin_ripple_cost = torch.zeros_like(self.ripple_cost)
+        self.yaw_ripple_cost = torch.zeros_like(self.ripple_cost)
+        self.response_cost = torch.zeros_like(self.ripple_cost)
+        self.response_error_w = torch.zeros_like(self.velocity_band)
+        self.response_error = torch.zeros_like(self.velocity_band)
+        self.response_ready = self.initialized.clone()
 
     def reset(self, env_ids=None):
         ids = slice(None) if env_ids is None else env_ids
         for value in (self.fast, self.slow, self.steps, self.velocity_band, self.wrench_band,
-                      self.ripple_cost, self.wrench_cost):
+                      self.ripple_cost, self.wrench_cost, self.lin_ripple_cost, self.yaw_ripple_cost,
+                      self.response_cost, self.response_error_w, self.response_error):
             value[ids] = 0
         self.initialized[ids] = False
         self.ready[ids] = False
+        self.response_ready[ids] = False
 
-    def _cost(self, signal, scale, deadband):
+    def _cost(self, signal, scale, deadband, ready=None):
         z = (signal.abs() - deadband).clamp_min(0) / scale
         # Huber loss, averaged over dimensions, with a fixed per-term ceiling.
         huber = torch.where(z <= 1, 0.5 * z.square(), z - 0.5)
-        return huber.mean(dim=-1).clamp_max(float(self.cfg.cost_cap)) * self.ready
+        mask = self.ready if ready is None else ready
+        return huber.mean(dim=-1).clamp_max(float(self.cfg.cost_cap)) * mask
 
     def update(self, velocity_c, reference_c, yaw, force_w, moment_w, valid=None):
         """One post-physics sample. Seed each reset row from its first valid sample (zero initial band).
@@ -110,6 +130,11 @@ class CartQualityTracker:
         sample = torch.cat((error_w, wrench_w), dim=-1)
         sample = torch.where(valid[:, None], sample, self.fast)
         seed = valid & ~self.initialized
+        # Filtering the world-frame difference equals filtering velocity/reference identically.
+        # Seed to the actual error: a persistent initial tracking error must not disappear.
+        response_sample = torch.where(valid[:, None], error_w, self.response_error_w)
+        self.response_error_w = torch.where(seed[:, None], response_sample, self.response_error_w)
+        self.response_error_w += self.alpha_response * (response_sample - self.response_error_w)
         self.fast = torch.where(seed[:, None], sample, self.fast)
         self.slow = torch.where(seed[:, None], sample, self.slow)
         self.fast += self.alpha_fast * (sample - self.fast) * valid[:, None]
@@ -122,10 +147,20 @@ class CartQualityTracker:
         self.velocity_band = rotate_planar(band[:, :3], safe_yaw, inverse=True)
         self.wrench_band = rotate_planar(band[:, 3:], safe_yaw, inverse=True)
         self.ripple_cost = self._cost(self.velocity_band, self.velocity_scale, self.velocity_deadband)
+        self.lin_ripple_cost = self._cost(self.velocity_band[:, :2], self.velocity_scale[:2], self.velocity_deadband[:2])
+        self.yaw_ripple_cost = self._cost(self.velocity_band[:, 2:], self.velocity_scale[2:], self.velocity_deadband[2:])
         self.wrench_cost = self._cost(self.wrench_band, self.wrench_scale, self.wrench_deadband)
+        # Response accounting starts on the first valid sample, not after ripple's 1 s warmup.
+        self.response_ready = valid
+        self.response_error = torch.where(
+            valid[:, None], rotate_planar(self.response_error_w, safe_yaw, inverse=True),
+            torch.zeros_like(self.response_error_w))
+        self.response_cost = self._cost(self.response_error, self.response_scale, self.response_deadband, valid)
 
     def metadata(self):
         return {"filter": "difference_of_one_pole_lowpasses_world_frame", "low_hz": self.cfg.low_hz,
                 "high_hz": self.cfg.high_hz, "control_dt_s": self.dt, "warmup_s": self.cfg.warmup_s,
                 "velocity_scale": list(self.cfg.velocity_scale), "wrench_scale": list(self.cfg.wrench_scale),
-                "wrench_input_clip": list(self.cfg.wrench_input_clip), "cost_cap": self.cfg.cost_cap}
+                "wrench_input_clip": list(self.cfg.wrench_input_clip), "cost_cap": self.cfg.cost_cap,
+                "response_filter_tau_s": self.cfg.response_filter_tau_s,
+                "response_scale": list(self.cfg.response_scale), "response_warmup_s": 0.0}

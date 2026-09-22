@@ -112,7 +112,7 @@ def main(argv=None):
 
     train_parser = sub.add_parser("train", help="phase B training via NVIDIA's rsl_rl train.py (extra args forwarded, e.g. --num_envs 4096 --headless --level 0)")
     train_parser.add_argument("--quality_profile", choices=["diagnostic", "ripple", "wrench", "combined"],
-                              help="V3.1 experiment: diagnostics only, cart velocity ripple, cart wrench oscillation, or both")
+                              help="cart quality: legacy ripple/wrench, or combined split linear/yaw ripple + response tracking + wrench")
     sub.add_parser("play", help="play a high-level checkpoint via NVIDIA's rsl_rl play.py (--checkpoint <run>/model_N.pt)")
 
     ev = sub.add_parser("eval", help="Isaac Lab: fixed scenario suite for a high-level checkpoint (or passthrough baseline without --checkpoint)")
