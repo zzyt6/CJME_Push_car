@@ -1,0 +1,140 @@
+{
+  "photo_count": 12,
+  "distinct_photo_hashes": 12,
+  "all_poses_match_saved_snapshots_exactly": true,
+  "visual_qa": "All 12 images viewed together; left and right native hand geometry visible, wrists and fingers within image bounds, original cart handle only, exact RGB 0 255 0 surroundings. Frames are independently replayed and rendered, not duplicated or mirrored.",
+  "photos": [
+    {
+      "file": "frame_01_both_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.7715575,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "71bfed7db8c719cc5e50b74948a2cade084c65f4bd2cb1ec7277e1e6371d6389"
+    },
+    {
+      "file": "frame_01_left_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.651416875,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "9399016c99379bee73a467c69264621bf1ea43ff60816a4773b33c99fb2f29bb"
+    },
+    {
+      "file": "frame_01_right_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.65802875,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "2a84e502e7188d54d45025ccf2ee5cb1ef648138cfcd2042cc33641ae5dcfec4"
+    },
+    {
+      "file": "frame_02_both_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.77278875,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "2fc1b58c1af86f55ebdde5dd929aff460f7065a9add74ded654dc9f7a20593f1"
+    },
+    {
+      "file": "frame_02_left_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.660175,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "a33b16167deea1d79e495709f9544766b22e62de4e0e36f93a6987403952be38"
+    },
+    {
+      "file": "frame_02_right_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.649909375,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "52d37e1ae89bff80eeba1c0d28bf52a87bbc7dd3fb969c5d8ce45c457422e41d"
+    },
+    {
+      "file": "frame_03_both_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.77256875,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "a41ffe95fc05eec605ea503f19257dda8de35a8854ee3d4aa7a379a7b81723b0"
+    },
+    {
+      "file": "frame_03_left_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.655031875,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "00beedecaf89091f5f7f3f8cd97d1fa6c22b9f3ba17d50a44066a63cb13ce0ea"
+    },
+    {
+      "file": "frame_03_right_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.6548375,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "609f88e15bc852d3864d7c4e1aa901f01dd3342fceecc22e8b8035f618d20dc2"
+    },
+    {
+      "file": "frame_04_both_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.77302125,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "2326e823ea87eb18b6289fe53d84a3c4c73f6230bd457e60f1e8e12f0204bda2"
+    },
+    {
+      "file": "frame_04_left_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.664440625,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "1f7cc67f55b16b5132dcf78912dae9b04e762923f264918abd45d86095976ac2"
+    },
+    {
+      "file": "frame_04_right_hands_greenscreen.png",
+      "dimensions_px": [
+        1600,
+        1000
+      ],
+      "exact_green_background_fraction": 0.647171875,
+      "foreground_count_matches_native_mask": true,
+      "pose_replay_max_abs_error": 0.0,
+      "sha256": "dae8ff9d2fc1fbab3b3dd041704c347dc4c0c529a1cbd121e0003e72953e18cd"
+    }
+  ]
+}

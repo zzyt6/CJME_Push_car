@@ -365,8 +365,10 @@ class PushCartSimEnv(HomieIsaacLabEnv):
     def grasp_wrench(self):
         """Legacy gravity-compensated proxy for each hand's cart force / torque.
 
-        PhysX reports, per link, the spatial force the parent transmits through the incoming articulation
-        joint, in its joint frame. This conversion assumes that frame/origin coincide with the palm's.
+        The raw PhysX tensor reports the incoming joint wrench in body1's frame at body1's origin
+        (see the installed Isaac Lab joint_wrench conversion kernel). We rotate it using the palm
+        body pose here, assuming the tensor's child-body frame/origin matches that palm link. It is
+        not the sensor's already-converted child-side joint frame; do not rotate by the joint twice.
         Neglecting hand-subtree acceleration and other external loads, the quasi-static estimate is
             F_hand->cart = F_incoming + m_hand * g          (world frame, after rotating F_incoming)
         Returns (force_w [N,2,3], torque_w [N,2,3], force_palm [N,2,3]); torque is about the palm origin

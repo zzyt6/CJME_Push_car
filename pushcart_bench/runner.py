@@ -8,7 +8,7 @@ import time
 import numpy as np
 
 from .follower import FollowerConfig, PathFollower
-from .metrics import Trace, path_metrics, step_response_metrics, stopping_distance
+from .metrics import Trace, path_metrics, step_response_metrics, stopping_metrics, reference_tracking_metrics
 from .paths import Path
 
 
@@ -151,11 +151,14 @@ def run_step(policy, step: dict, cond: Condition, cfg: dict, viewer=None, label:
     trace = Trace()
     if viewer is not None:
         viewer.begin_run(None, policy, label)
-    t, n = 0.0, int(round(seconds / policy.dt))
+    n = int(round(seconds / policy.dt))
+    # Use integer control ticks: repeated floating-point addition delayed a 5 s step by one tick.
+    switch_tick = max(0, int(math.ceil(pre_s / policy.dt - 1e-9)))
+    switch_s = switch_tick * policy.dt
     for k in range(n):
-        cmd = cmd0 if t < pre_s else cmd1
+        cmd = cmd0 if k < switch_tick else cmd1
         policy.step(cmd)
-        t += policy.dt
+        t = (k + 1) * policy.dt
         trace.append(t, policy.pose(), policy.velocity(), cmd, None, policy.telemetry())
         failure = policy.failure()
         if failure:
@@ -163,22 +166,64 @@ def run_step(policy, step: dict, cond: Condition, cfg: dict, viewer=None, label:
             break
         if viewer is not None:
             viewer.on_step(policy, None, cmd, trace)
+    m = summarize_step(trace, step, cond, cfg, switch_s=switch_s)
+    result = {"kind": "step", "label": label, "policy": policy.describe(), "step": step, "condition": cond.to_dict(),
+              "metrics_version": "v4", "metrics": m, "trace_dt_s": policy.dt * int(cfg.get("trace_stride", 2)),
+              "trace": trace.decimated(int(cfg.get("trace_stride", 2)))}
+    if viewer is not None:
+        viewer.end_run(result)
+    return result
+
+
+def summarize_step(trace: Trace, step: dict, cond: Condition, cfg: dict, *, switch_s: float | None = None) -> dict:
+    """Shared online/offline step evaluation; timestamps are post-physics sample times."""
+    pre_s = float(step.get("pre_s", 2.0)) if switch_s is None else float(switch_s)
+    signal = step.get("signal", "vx")
+    idx = {"vx": 0, "vy": 1, "wz": 2}[signal]
+    cmd0, cmd1 = np.asarray(step["cmd0"], float), np.asarray(step["cmd1"], float)
     y = [trace.vx, trace.vy, trace.wz][idx]
     smooth = float(cfg.get("defaults", {}).get("step_filter_s", 0.0))
-    m = step_response_metrics(trace.t, y, pre_s, float(cmd0[idx]), float(cmd1[idx]), smooth_s=smooth)
+    dwell = float(cfg.get("defaults", {}).get("settling_dwell_s", 0.5))
+    tr = float(cfg.get("defaults", {}).get("transient_s", 1.5))
+    m = step_response_metrics(trace.t, y, pre_s, float(cmd0[idx]), float(cmd1[idx]),
+                              smooth_s=smooth, settling_dwell_s=dwell)
+    m["command_switch_s"] = pre_s
+    # The task intentionally tracks a 0.4 s first-order reference. Report its own envelope
+    # separately so the raw-command response is not mistaken for high-level actuator latency.
+    ref_series = trace.telemetry_series(f"cart_ref_{signal}")
+    if np.isfinite(ref_series).any():
+        ref_m = step_response_metrics(trace.t, ref_series, pre_s, float(cmd0[idx]), float(cmd1[idx]),
+                                     smooth_s=0.0, settling_dwell_s=dwell)
+        for key in ("rise_time", "settling_time", "settling_confirmed", "overshoot", "ss_error", "ss_std"):
+            m[f"reference_{key}"] = ref_m.get(key)
+        m.update(reference_tracking_metrics(trace.t, y, ref_series, pre_s, transient_s=tr))
     m["signal"] = signal
     m["filter_s"] = smooth
     m["failure"] = trace.failure
     speed = np.hypot(trace.vx, trace.vy)
     if step.get("stopping"):
-        m["stopping_distance"] = stopping_distance(trace.t, trace.x, trace.y, speed, pre_s)
+        stop = stopping_metrics(trace.t, trace.x, trace.y, speed, pre_s,
+                                dwell_s=float(cfg.get("defaults", {}).get("stop_dwell_s", 0.5)))
+        m["stopping_distance"] = stop["confirmed_distance"]
+        m["stopping_confirmed"] = stop["confirmed"]
+        m["stopping_time"] = stop["confirmed_time"]
+        m["first_low_distance"] = stop["first_low_distance"]
+        m["post_stop_travel"] = stop["post_confirm_travel"]
+        m["stop_rebound_count"] = stop["rebound_count"]
+        m["stop_rebound_events"] = stop["rebound_events"]
+        m["stop_invalid_samples"] = stop["invalid_samples"]
+        m["first_low_time"] = stop["first_low_time"]
+        m["stop_dwell_s"] = stop["dwell_s"]
+        m["stop_v_threshold"] = stop["v_stop"]
+        m["first_stop_confirmed_time"] = stop["first_confirmed_time"]
+        m["first_stop_confirmed_distance"] = stop["first_confirmed_distance"]
+        m["post_first_stop_travel"] = stop["post_first_confirm_travel"]
     if step.get("drift"):
         xy = np.stack([trace.x, trace.y], axis=1)
         m["drift_distance"] = float(np.linalg.norm(xy[-1] - xy[0])) if len(xy) else None
         m["drift_speed_mean"] = float(np.mean(speed)) if len(speed) else None
         m["drift_yaw"] = float(abs(math.atan2(math.sin(trace.yaw[-1] - trace.yaw[0]), math.cos(trace.yaw[-1] - trace.yaw[0])))) if trace.yaw else None
     # command tracking after the transient
-    tr = float(cfg.get("defaults", {}).get("transient_s", 1.5))
     tt = np.asarray(trace.t)
     sel = tt >= pre_s + tr
     if sel.any():
@@ -190,10 +235,6 @@ def run_step(policy, step: dict, cond: Condition, cfg: dict, viewer=None, label:
     from .metrics import interaction_metrics
     m.update(interaction_metrics(trace, _overload_thresholds(cfg, cond.payload_kg)))
     from .metrics import cart_quality_metrics
-    m.update(cart_quality_metrics(trace, start_s=pre_s + tr))
-    result = {"kind": "step", "label": label, "policy": policy.describe(), "step": step, "condition": cond.to_dict(),
-              "metrics": m, "trace_dt_s": policy.dt * int(cfg.get("trace_stride", 2)),
-              "trace": trace.decimated(int(cfg.get("trace_stride", 2)))}
-    if viewer is not None:
-        viewer.end_run(result)
-    return result
+    m.update(cart_quality_metrics(trace, start_s=pre_s + tr,
+                                  response_window=(pre_s, pre_s + tr)))
+    return m

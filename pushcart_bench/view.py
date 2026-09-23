@@ -225,8 +225,12 @@ class BenchViewer:
                    f"{m.get('cross_track_rms', float('nan')):.3f} | {m.get('cross_track_max', float('nan')):.3f} |")
             header = ["| 运行 | 策略 | 结果 | 到点 s | 终点误差 m | 横向 RMS m | 横向 max m |", "|---|---|---|---|---|---|---|"]
         else:
+            if result.get("step", {}).get("stopping"):
+                stop = "已确认" if m.get("stopping_confirmed") else "未确认"
+            else:
+                stop = "-"
             row = (f"| {result['label']} | {result['policy']['name']} | {m.get('signal')} | {m.get('rise_time')} | {m.get('settling_time')} | "
-                   f"{m.get('overshoot')} | {m.get('ss_error')} |")
-            header = ["| 运行 | 策略 | 信号 | 上升 s | 整定 s | 超调 | 稳态误差 |", "|---|---|---|---|---|---|---|"]
+                   f"{m.get('overshoot')} | {m.get('ss_error')} | {stop} | {m.get('failure') or '-'} |")
+            header = ["| 运行 | 策略 | 信号 | 上升 s | 整定 s | 超调 | 稳态误差 | 最终停稳 | 失败 |", "|---|---|---|---|---|---|---|---|---|"]
         self.results_rows.append(row)
         self.results_md.content = "\n".join(header + self.results_rows[-30:])

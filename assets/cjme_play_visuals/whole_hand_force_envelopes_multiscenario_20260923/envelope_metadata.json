@@ -1,0 +1,521 @@
+{
+  "source": "E:\\CJME_Push_car\\assets\\cjme_play_visuals\\verified_policy_multiscenario_20260923\\physics_trace_200Hz_multiscenario.npz",
+  "source_sha256": "184f191c031f57be8da37d3c9d394b3f78ede4e9bf1eb48895572b06fcd0c880",
+  "method": "3D convex hull of actual force vector endpoints in world axes",
+  "new_physics_run": true,
+  "sampling_rate_Hz": 200,
+  "samples_per_hand": 32600,
+  "time_range_s": [
+    0.0,
+    162.995
+  ],
+  "main_sign": "force on hand = negative of recorded force on cart",
+  "color": "vector magnitude in N; common range [0,130]. Mesh colors interpolate actual vertex magnitudes in HTML; PNG facet colors use actual facet-centroid magnitudes.",
+  "axis_range_N": [
+    -130,
+    130
+  ],
+  "smoothing": false,
+  "synthetic_points_added": 0,
+  "variants": [
+    {
+      "variant": "on_hand_0s",
+      "side": "left",
+      "samples": 32600,
+      "hull_vertices": 40,
+      "hull_triangles": 76,
+      "hull_volume_N3": 2178519.427157376,
+      "peak_force_N": 116.97778155347613,
+      "peak_time_s": 128.16,
+      "force_min_N": [
+        -90.48187098380632,
+        -98.91730268264824,
+        -97.8872037795112
+      ],
+      "force_max_N": [
+        97.6184876810556,
+        71.70801918386516,
+        87.13965252463937
+      ],
+      "origin_inside_hull": true,
+      "max_sample_outside_hull_distance_N": 2.842170943040401e-14
+    },
+    {
+      "variant": "on_hand_0s",
+      "side": "right",
+      "samples": 32600,
+      "hull_vertices": 57,
+      "hull_triangles": 110,
+      "hull_volume_N3": 2404567.0010543773,
+      "peak_force_N": 109.69991680964036,
+      "peak_time_s": 136.32,
+      "force_min_N": [
+        -97.07144459534004,
+        -79.73507272129336,
+        -94.51055156311703
+      ],
+      "force_max_N": [
+        77.08425751607402,
+        106.1218208762253,
+        87.7319978876109
+      ],
+      "origin_inside_hull": true,
+      "max_sample_outside_hull_distance_N": 1.4210854715202004e-14
+    },
+    {
+      "variant": "on_hand_1s",
+      "side": "left",
+      "samples": 32400,
+      "hull_vertices": 40,
+      "hull_triangles": 76,
+      "hull_volume_N3": 2178519.427157376,
+      "peak_force_N": 116.97778155347613,
+      "peak_time_s": 128.16,
+      "force_min_N": [
+        -90.48187098380632,
+        -98.91730268264824,
+        -97.8872037795112
+      ],
+      "force_max_N": [
+        97.6184876810556,
+        71.70801918386516,
+        87.13965252463937
+      ],
+      "origin_inside_hull": true,
+      "max_sample_outside_hull_distance_N": 2.842170943040401e-14
+    },
+    {
+      "variant": "on_hand_1s",
+      "side": "right",
+      "samples": 32400,
+      "hull_vertices": 57,
+      "hull_triangles": 110,
+      "hull_volume_N3": 2404567.0010543773,
+      "peak_force_N": 109.69991680964036,
+      "peak_time_s": 136.32,
+      "force_min_N": [
+        -97.07144459534004,
+        -79.73507272129336,
+        -94.51055156311703
+      ],
+      "force_max_N": [
+        77.08425751607402,
+        106.1218208762253,
+        87.7319978876109
+      ],
+      "origin_inside_hull": true,
+      "max_sample_outside_hull_distance_N": 1.4210854715202004e-14
+    },
+    {
+      "variant": "on_cart_0s",
+      "side": "left",
+      "samples": 32600,
+      "hull_vertices": 40,
+      "hull_triangles": 76,
+      "hull_volume_N3": 2178519.4271573764,
+      "peak_force_N": 116.97778155347613,
+      "peak_time_s": 128.16,
+      "force_min_N": [
+        -97.6184876810556,
+        -71.70801918386516,
+        -87.13965252463937
+      ],
+      "force_max_N": [
+        90.48187098380632,
+        98.91730268264824,
+        97.8872037795112
+      ],
+      "origin_inside_hull": true,
+      "max_sample_outside_hull_distance_N": 2.842170943040401e-14
+    },
+    {
+      "variant": "on_cart_0s",
+      "side": "right",
+      "samples": 32600,
+      "hull_vertices": 57,
+      "hull_triangles": 110,
+      "hull_volume_N3": 2404567.0010543764,
+      "peak_force_N": 109.69991680964036,
+      "peak_time_s": 136.32,
+      "force_min_N": [
+        -77.08425751607402,
+        -106.1218208762253,
+        -87.7319978876109
+      ],
+      "force_max_N": [
+        97.07144459534004,
+        79.73507272129336,
+        94.51055156311703
+      ],
+      "origin_inside_hull": true,
+      "max_sample_outside_hull_distance_N": 1.4210854715202004e-14
+    },
+    {
+      "variant": "on_cart_1s",
+      "side": "left",
+      "samples": 32400,
+      "hull_vertices": 40,
+      "hull_triangles": 76,
+      "hull_volume_N3": 2178519.4271573764,
+      "peak_force_N": 116.97778155347613,
+      "peak_time_s": 128.16,
+      "force_min_N": [
+        -97.6184876810556,
+        -71.70801918386516,
+        -87.13965252463937
+      ],
+      "force_max_N": [
+        90.48187098380632,
+        98.91730268264824,
+        97.8872037795112
+      ],
+      "origin_inside_hull": true,
+      "max_sample_outside_hull_distance_N": 2.842170943040401e-14
+    },
+    {
+      "variant": "on_cart_1s",
+      "side": "right",
+      "samples": 32400,
+      "hull_vertices": 57,
+      "hull_triangles": 110,
+      "hull_volume_N3": 2404567.0010543764,
+      "peak_force_N": 109.69991680964036,
+      "peak_time_s": 136.32,
+      "force_min_N": [
+        -77.08425751607402,
+        -106.1218208762253,
+        -87.7319978876109
+      ],
+      "force_max_N": [
+        97.07144459534004,
+        79.73507272129336,
+        94.51055156311703
+      ],
+      "origin_inside_hull": true,
+      "max_sample_outside_hull_distance_N": 1.4210854715202004e-14
+    }
+  ],
+  "scenario_metadata": [
+    {
+      "id": 0,
+      "name": "rich_sweep",
+      "payload_kg": 0.0,
+      "caster_angle_rad": 0.0,
+      "duration_s": 36.0,
+      "schedule": [
+        [
+          0.0,
+          [
+            0.3,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          4.0,
+          [
+            0.6,
+            0.12,
+            0.2
+          ]
+        ],
+        [
+          8.0,
+          [
+            0.2,
+            0.24,
+            0.4
+          ]
+        ],
+        [
+          12.0,
+          [
+            -0.3,
+            0.0,
+            -0.25
+          ]
+        ],
+        [
+          16.0,
+          [
+            0.5,
+            -0.2,
+            -0.4
+          ]
+        ],
+        [
+          20.0,
+          [
+            -0.5,
+            0.15,
+            0.3
+          ]
+        ],
+        [
+          24.0,
+          [
+            0.0,
+            -0.25,
+            -0.35
+          ]
+        ],
+        [
+          28.0,
+          [
+            0.7,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          32.0,
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      ]
+    },
+    {
+      "id": 1,
+      "name": "lateral_turn",
+      "payload_kg": 5.0,
+      "caster_angle_rad": 0.0,
+      "duration_s": 24.0,
+      "schedule": [
+        [
+          0.0,
+          [
+            0.15,
+            0.25,
+            0.35
+          ]
+        ],
+        [
+          5.0,
+          [
+            0.15,
+            -0.25,
+            -0.35
+          ]
+        ],
+        [
+          10.0,
+          [
+            -0.15,
+            0.2,
+            0.4
+          ]
+        ],
+        [
+          15.0,
+          [
+            -0.15,
+            -0.2,
+            -0.4
+          ]
+        ],
+        [
+          20.0,
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      ]
+    },
+    {
+      "id": 2,
+      "name": "stop_go_reverse",
+      "payload_kg": 15.0,
+      "caster_angle_rad": 3.141592653589793,
+      "duration_s": 23.0,
+      "schedule": [
+        [
+          0.0,
+          [
+            0.6,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          5.0,
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          9.0,
+          [
+            -0.6,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          14.0,
+          [
+            0.45,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          19.0,
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      ]
+    },
+    {
+      "id": 3,
+      "name": "cross_caster",
+      "payload_kg": 25.0,
+      "caster_angle_rad": 1.5707963267948966,
+      "duration_s": 45.0,
+      "schedule": [
+        [
+          0.0,
+          [
+            0.7,
+            0.2,
+            0.0
+          ]
+        ],
+        [
+          5.0,
+          [
+            -0.6,
+            -0.2,
+            0.0
+          ]
+        ],
+        [
+          10.0,
+          [
+            0.0,
+            0.25,
+            0.4
+          ]
+        ],
+        [
+          15.0,
+          [
+            0.0,
+            -0.25,
+            -0.4
+          ]
+        ],
+        [
+          20.0,
+          [
+            0.45,
+            0.0,
+            0.4
+          ]
+        ],
+        [
+          25.0,
+          [
+            -0.45,
+            0.0,
+            -0.4
+          ]
+        ],
+        [
+          30.0,
+          [
+            0.3,
+            0.2,
+            -0.35
+          ]
+        ],
+        [
+          35.0,
+          [
+            -0.3,
+            -0.2,
+            0.35
+          ]
+        ],
+        [
+          40.0,
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      ]
+    },
+    {
+      "id": 4,
+      "name": "payload_turn",
+      "payload_kg": 25.0,
+      "caster_angle_rad": -1.5707963267948966,
+      "duration_s": 35.0,
+      "schedule": [
+        [
+          0.0,
+          [
+            0.6,
+            0.25,
+            0.4
+          ]
+        ],
+        [
+          6.0,
+          [
+            -0.6,
+            -0.25,
+            -0.4
+          ]
+        ],
+        [
+          12.0,
+          [
+            0.3,
+            -0.25,
+            0.3
+          ]
+        ],
+        [
+          18.0,
+          [
+            -0.3,
+            0.25,
+            -0.3
+          ]
+        ],
+        [
+          24.0,
+          [
+            0.7,
+            0.0,
+            0.0
+          ]
+        ],
+        [
+          30.0,
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      ]
+    }
+  ],
+  "source_failures": [],
+  "continuous_run": false,
+  "segments": 5,
+  "segment_boundaries_preserved": true
+}

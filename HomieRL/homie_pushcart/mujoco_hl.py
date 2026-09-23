@@ -74,6 +74,9 @@ class MujocoHighLevelRunner:
         self.cart_free = m.joint("cart_free")
         self.upper_act = env.act_idx[n_low:]
         self.quality = CartQualityTracker(tc.quality, self.dt, 1, dtype=torch.float64)
+        from .idle_correction import IdleCorrectionTracker
+        self.idle_correction = (IdleCorrectionTracker(tc.idle_correction, self.dt, 1, "cpu")
+                                if tc.idle_correction.enabled else None)
         self.wheel_body_ids = [mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, f"wheel_{i}") for i in range(4)]
         self.reset_buffers()
 
@@ -98,6 +101,9 @@ class MujocoHighLevelRunner:
 
     def reset_buffers(self):
         self.quality.reset()
+        if self.idle_correction is not None:
+            self.idle_correction.reset()
+        self.idle_gate_applied = 0.0
         self.cmd_task = np.zeros(3)
         self.cmd_ref = np.zeros(3)
         self.cmd_homie = np.zeros(3)
@@ -158,6 +164,11 @@ class MujocoHighLevelRunner:
         self.cmd_task = np.asarray(cmd_task, dtype=float)
         self.cmd_ref = self.cmd_ref + self.ref_alpha * (self.cmd_task - self.cmd_ref)
         gate = min(1.0, float(np.linalg.norm(self.cmd_ref)) / self.gate_speed) if self.gate_speed > 0 else 1.0
+        if self.idle_correction is not None:
+            self.idle_gate_applied = float(self.idle_correction.gate(
+                torch.as_tensor(self.cmd_ref[None], dtype=torch.float32),
+                torch.as_tensor(self.cmd_task[None], dtype=torch.float32))[0, 0])
+            gate = max(gate, self.idle_gate_applied)
         if self.hl is not None:
             a = self.hl(torch.from_numpy(self.hl_obs).unsqueeze(0)).squeeze(0).cpu().numpy()
             a = np.clip(a, -tc.actions.clip, tc.actions.clip)
@@ -198,6 +209,15 @@ class MujocoHighLevelRunner:
         scale = np.array([self.lp.arm_scale / tc.actions.arm_scale_range[1]])
         frame = np.concatenate([homie_frame, task_cmd, mass, tau, est_scaled, diff, pose, self.hl_actions, scale]).astype(np.float32)
         assert frame.shape[0] == HL_FRAME, frame.shape
+        if self.idle_correction is not None:
+            # Match the training estimator's actor-visible inputs and control-step timing.
+            self.idle_correction.update(
+                torch.as_tensor(pose[None, :3], dtype=torch.float32),
+                torch.as_tensor(pose[None, 3], dtype=torch.float32),
+                torch.as_tensor(self.vel_est[None], dtype=torch.float32),
+                torch.as_tensor(homie_frame[None, 4:7] / env.obs_scales["ang_vel"], dtype=torch.float32),
+                torch.as_tensor(homie_frame[None, 7:10], dtype=torch.float32),
+                task_command=torch.as_tensor(self.cmd_task[None], dtype=torch.float32))
         if fresh:
             self.actor_hist[:] = 0.
         else:

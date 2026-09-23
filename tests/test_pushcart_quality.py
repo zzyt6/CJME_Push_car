@@ -18,7 +18,7 @@ for path in (ROOT, ROOT / "HomieRL", ROOT / "HomieRL/rsl_rl"):
 from homie_pushcart.cart_quality import (CartQualityTracker, QUALITY_REWARD_NAMES, apply_quality_profile,
                                         resultant_wrench, rotate_planar)
 from homie_pushcart.task_config import PushCartTaskCfg, task_cfg_from_run, num_actor_obs, num_critic_obs
-from pushcart_bench.metrics import Trace, cart_quality_metrics, disturbance_recovery_metrics
+from pushcart_bench.metrics import Trace, cart_quality_metrics, disturbance_recovery_metrics, stopping_metrics
 
 
 class WrenchGeometryTests(unittest.TestCase):
@@ -63,6 +63,52 @@ class WrenchGeometryTests(unittest.TestCase):
         np.testing.assert_allclose(result, -load, atol=0.02, rtol=0.005)
         np.testing.assert_array_equal(data.qpos, before[0])
         np.testing.assert_array_equal(data.qvel, before[1])
+
+
+class V4ResetAndStopTests(unittest.TestCase):
+    def test_force_rate_seeds_first_valid_wrench(self):
+        from homie_pushcart.task_env import PushCartEnv
+        force = torch.tensor([[[30., 0., 0.], [30., 0., 0.]]])
+        task_cfg = apply_quality_profile(PushCartTaskCfg(), "v4")
+        obj = SimpleNamespace(
+            ts=SimpleNamespace(force_c=force, budget=torch.tensor([100.])),
+            force_c_prev=torch.zeros(1, 2, 3),
+            force_c_prev_valid=torch.zeros(1, dtype=torch.bool),
+            task_cfg=task_cfg,
+        )
+        self.assertEqual(float(PushCartEnv._reward_force_rate(obj)[0]), 0.)
+        self.assertEqual(float(PushCartEnv._reward_force_rate(obj)[0]), 0.)
+        obj.ts.force_c = force + 10.
+        self.assertGreater(float(PushCartEnv._reward_force_rate(obj)[0]), 0.)
+
+        legacy = SimpleNamespace(
+            ts=SimpleNamespace(force_c=force, budget=torch.tensor([100.])),
+            force_c_prev=torch.zeros(1, 2, 3),
+            force_c_prev_valid=torch.zeros(1, dtype=torch.bool),
+            task_cfg=PushCartTaskCfg(),
+        )
+        self.assertGreater(float(PushCartEnv._reward_force_rate(legacy)[0]), 0.)
+
+    def test_stop_requires_dwell_and_reports_rebound(self):
+        t = np.arange(0., 4., .1)
+        speed = np.full_like(t, .2)
+        speed[(t >= 1.) & (t < 1.8)] = .02
+        speed[(t >= 1.8) & (t < 2.2)] = .12
+        speed[t >= 2.2] = .01
+        x = np.cumsum(speed) * .1
+        m = stopping_metrics(t, x, np.zeros_like(x), speed, 1., dwell_s=.5)
+        self.assertTrue(m["confirmed"])
+        self.assertAlmostEqual(m["first_low_time"], .0, places=6)
+        self.assertGreaterEqual(m["rebound_count"], 1)
+        self.assertGreater(m["post_confirm_travel"], 0.)
+
+    def test_stop_without_dwell_is_unconfirmed(self):
+        t = np.arange(0., 2., .1)
+        speed = np.full_like(t, .2)
+        speed[10] = .01
+        m = stopping_metrics(t, .2 * t, np.zeros_like(t), speed, 1., dwell_s=.5)
+        self.assertFalse(m["confirmed"])
+        self.assertIsNone(m["confirmed_distance"])
 
 
 class QualityFilterTests(unittest.TestCase):
@@ -221,6 +267,7 @@ class QualityIntegrationTests(unittest.TestCase):
     def test_profiles_are_opt_in_and_old_layout_is_unchanged(self):
         old = PushCartTaskCfg()
         new = apply_quality_profile(PushCartTaskCfg(), "combined")
+        v4 = apply_quality_profile(PushCartTaskCfg(), "v4")
         self.assertFalse(old.quality.enabled)
         self.assertEqual(old.rewards.scales.cart_ripple, 0.)
         self.assertEqual(new.rewards.scales.cart_ripple, 0.)
@@ -228,6 +275,11 @@ class QualityIntegrationTests(unittest.TestCase):
         self.assertEqual(new.rewards.scales.cart_yaw_ripple, -.15)
         self.assertEqual(new.rewards.scales.cart_response_error, -.10)
         self.assertEqual(new.rewards.scales.cart_wrench_osc, -.02)
+        self.assertEqual(v4.rewards.scales.cart_lin_ripple, new.rewards.scales.cart_lin_ripple)
+        self.assertEqual(v4.rewards.scales.cart_yaw_ripple, new.rewards.scales.cart_yaw_ripple)
+        self.assertEqual(v4.rewards.scales.cart_response_error, new.rewards.scales.cart_response_error)
+        self.assertFalse(new.rewards.force_rate_seed_on_reset)
+        self.assertTrue(v4.rewards.force_rate_seed_on_reset)
         self.assertEqual((num_actor_obs(new), num_critic_obs(new)), (num_actor_obs(old), num_critic_obs(old)))
         self.assertEqual(new.env.num_hl_actions, 18)
         with tempfile.TemporaryDirectory() as td:
@@ -265,6 +317,12 @@ class QualityIntegrationTests(unittest.TestCase):
         self.assertIn('env.task.rewards.scales.cart_lin_ripple=-0.1', args)
         self.assertIn('env.task.rewards.scales.cart_yaw_ripple=-0.15', args)
         self.assertIn('env.task.rewards.scales.cart_response_error=-0.1', args)
+        self.assertIn('env.task.rewards.force_rate_seed_on_reset=false', args)
+        with patch.object(training, '_lab_scripts', return_value=Path('official')), patch.object(training, '_run', return_value=0) as run:
+            training.train(['--quality_profile', 'v4', '--num_envs', '16', '--headless'])
+        args = run.call_args.args[1]
+        self.assertIn('env.task.rewards.force_rate_seed_on_reset=true', args)
+        self.assertIn('env.task.rewards.scales.cart_lin_ripple=-0.1', args)
 
     def test_response_metrics_include_valid_first_second_and_exclude_invalid_samples(self):
         trace = Trace()
@@ -279,6 +337,21 @@ class QualityIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(metrics['cart_response_error_cost_mean'], .2)
         self.assertNotIn('cart_response_error_wz_rmse', metrics)
         self.assertEqual(len(trace.decimated(1)['cart_response_error_vx']), 3)
+
+    def test_response_transient_window_is_independent_of_steady_window(self):
+        trace = Trace()
+        for i in range(20):
+            t = i * .1
+            transient = 1. if .5 < t <= 1.0 else 0.
+            trace.append(t, [0, 0, 0], [0, 0, 0], [.3, 0, 0], telemetry={
+                'quality_ready': True, 'cart_response_ready': True,
+                'cart_response_error_vx': transient,
+                'cart_response_error_cost': transient,
+            })
+        metrics = cart_quality_metrics(trace, start_s=1.1, response_window=(.5, 1.0))
+        self.assertEqual(metrics['cart_response_error_cost_mean'], 0.)
+        self.assertEqual(metrics['cart_response_error_cost_mean_transient'], 1.)
+        self.assertEqual(metrics['cart_response_error_vx_rmse_transient'], 1.)
 
     def test_metrics_exclude_transient_but_keep_failure_peak(self):
         trace = Trace()

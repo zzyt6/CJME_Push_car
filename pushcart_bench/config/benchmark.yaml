@@ -17,6 +17,8 @@ defaults:
   level: 17                       # curriculum level of the two-stage policy (upper-body correction scale)
   transient_s: 1.5                # step tests: ignored window after a command change for the RMSE statistics
   step_filter_s: 0.4              # step tests: moving average before rise / settling / overshoot (gait oscillation ~2 Hz)
+  stop_dwell_s: 0.5               # V4: speed must stay below the stop threshold for this long
+  settling_dwell_s: 0.5           # final in-band interval must last this long to confirm settling
 
 # Shared high-level path-following controller (pushcart_bench/follower.py). Tuned once on robot_only, then frozen.
 follower:

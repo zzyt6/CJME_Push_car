@@ -143,7 +143,16 @@ class PushCartEnv(PushCartSimEnv):
         self.hl_critic_obs = z(N, H * HL_FRAME + PRIVILEGED_FRAME)
         self.cart_pose_hist = z(N, 3, 4)
         self.cart_pose_delay = z(N, dtype=torch.long)
+        from .command_schedule import V4CommandSchedule
+        from .idle_correction import IdleCorrectionTracker
+        self.command_schedule = (V4CommandSchedule(self.task_cfg.commands, self.dt, N, dev)
+                                 if self.task_cfg.commands.sequence_enabled else None)
+        self.idle_correction = (IdleCorrectionTracker(self.task_cfg.idle_correction, self.dt, N, dev)
+                                if self.task_cfg.idle_correction.enabled else None)
+        self.idle_gate_applied, self.idle_gate_sum = z(N), z(N)
         self.force_c_prev = z(N, 2, 3)
+        # The first valid post-reset wrench is a baseline, not a force-rate event.
+        self.force_c_prev_valid = z(N, dtype=torch.bool)
         self.overload_counter = z(N, dtype=torch.long)
         self.wheel_lift_counter = z(N, dtype=torch.long)
         self.cart_mass_total = torch.full((N,), self.cart_base_kg, device=dev)
@@ -215,6 +224,12 @@ class PushCartEnv(PushCartSimEnv):
         self.cmd_ref += self.ref_alpha * (self.cmd_task - self.cmd_ref)
         # zero reference -> residual and arm correction fade to zero: a standing robot is exact HOMIE passthrough
         gate = (self.cmd_ref.norm(dim=1, keepdim=True) / tc.actions.idle_gate_speed).clamp(0., 1.) if tc.actions.idle_gate_speed > 0 else 1.0
+        if self.idle_correction is not None:
+            idle_gate = self.idle_correction.gate(self.cmd_ref, self.cmd_task)
+            self.idle_gate_applied.copy_(idle_gate[:, 0])
+            self.idle_gate_sum += self.idle_gate_applied
+            if isinstance(gate, torch.Tensor):
+                gate = torch.maximum(gate, idle_gate)
         # HOMIE command = reference + residual, low-passed, clipped to the training ranges
         target = (self.cmd_ref + gate * applied[:, :3] * self.residual_scale).clamp(self.cmd_lo, self.cmd_hi)
         self.cmd_homie_prev.copy_(self.cmd_homie)
@@ -277,8 +292,10 @@ class PushCartEnv(PushCartSimEnv):
         ts.rel_yaw = wrap_angle(ts.cart_yaw - self.yaw.squeeze(1))
         ts.dist = rel[:, :2].norm(dim=-1)
         force_w, torque_w, _ = self.grasp_wrench()
-        valid = (self.episode_length_buf > 0).view(N, 1, 1).float()   # PhysX wrench is stale right after a reset
-        force_w, torque_w = force_w * valid, torque_w * valid
+        valid = (self.episode_length_buf > 0).view(N, 1, 1)   # PhysX wrench is stale right after a reset
+        # Multiplication does not mask a stale NaN/Inf (NaN * 0 is still NaN).
+        force_w = torch.where(valid, force_w, torch.zeros_like(force_w))
+        torque_w = torch.where(valid, torque_w, torch.zeros_like(torque_w))
         ts.force_w_raw, ts.torque_w_raw = force_w, torque_w
         if self.cart_quality is not None:
             ts.cart_force_w, ts.cart_moment_w, ts.cart_com_w = self.cart_hand_wrench(force_w, torque_w)
@@ -429,7 +446,18 @@ class PushCartEnv(PushCartSimEnv):
 
     def _reward_force_rate(self):
         rate = torch.sum(torch.square(self.ts.force_c - self.force_c_prev), dim=(1, 2)) / torch.square(self.ts.budget)
-        self.force_c_prev.copy_(self.ts.force_c)
+        if self.task_cfg.rewards.force_rate_seed_on_reset:
+            # Do not hide a non-finite first sample: the reward machinery must still fail fast.
+            finite = torch.isfinite(rate)
+            seed = ~self.force_c_prev_valid & finite
+            rate = torch.where(seed, torch.zeros_like(rate), rate)
+            # Only valid samples establish/update the history. The invalid reward above is
+            # still returned to the existing fail-fast check in HomieTaskCore.compute_reward.
+            self.force_c_prev.copy_(torch.where(finite[:, None, None], self.ts.force_c, self.force_c_prev))
+            self.force_c_prev_valid |= finite
+        else:
+            self.force_c_prev.copy_(self.ts.force_c)
+            self.force_c_prev_valid.fill_(True)
         return rate
 
     def _quality_reward_ramp(self):
@@ -526,6 +554,9 @@ class PushCartEnv(PushCartSimEnv):
         self._log_episode_diagnostics(env_ids)       # ... so the read-out comes after it and before the buffers are cleared
         self._reset_hl_state(env_ids)
         self._sample_task_command(env_ids)
+        if self.command_schedule is not None and self.fixed_command is None:
+            # step() decrements before testing due; the reset sample has not executed yet.
+            self.cmd_timer[env_ids] += 1
 
     def _log_episode_diagnostics(self, env_ids):
         ep = self.extras.setdefault("episode", {})
@@ -544,6 +575,12 @@ class PushCartEnv(PushCartSimEnv):
         for i, name in enumerate(("pull", "up", "tangential", "torque")):
             ep[f"term_overload_{name}"] = (overload & self.overload_dir[env_ids, i]).float().mean()
         ep["cart_mass_kg"] = self.cart_mass_total[env_ids].mean()
+        if self.command_schedule is not None:
+            for mode, name in enumerate(("random", "stop_go", "turn_reversal")):
+                ep[f"command_mode_{name}_frac"] = (self.command_schedule.mode[env_ids] == mode).float().mean()
+        if self.idle_correction is not None:
+            ep["idle_correction_gate_mean"] = (self.idle_gate_sum[env_ids]
+                                               / self.track_steps[env_ids].clamp_min(1.)).mean()
         # tracking RMSE against the reference (m/s, m/s, rad/s) and how the actions were used, per finished episode
         steps = self.track_steps[env_ids].clamp_min(1.)
         rmse = torch.sqrt(self.track_err2[env_ids] / steps.unsqueeze(1))
@@ -695,6 +732,13 @@ class PushCartEnv(PushCartSimEnv):
         self.response_error2_sum[env_ids] = 0.
         for buf in (*self.quality_sums.values(), *self.quality_peaks.values()):
             buf[env_ids] = 0.
+        self.force_c_prev_valid[env_ids] = False
+        self.idle_gate_applied[env_ids] = 0.
+        self.idle_gate_sum[env_ids] = 0.
+        if self.idle_correction is not None:
+            self.idle_correction.reset(env_ids)
+        if self.command_schedule is not None:
+            self.command_schedule.reset(env_ids, lp)
         noise = lp.obs_noise_frac
         self.cart_pose_delay[env_ids] = torch.randint(0, int(round(noise * tc.observations.cart_pose_delay_steps_max)) + 1, (n,), device=dev)
         self.hl_delay[env_ids] = torch.randint(0, int(round(noise * tc.actions.delay_steps_max)) + 1, (n,), device=dev)
@@ -714,6 +758,11 @@ class PushCartEnv(PushCartSimEnv):
         self.cmd_task[env_ids] = torch.cat((vx, vy, wz), -1) * keep
         lo, hi = int(cc.resample_time_s[0] / self.dt), int(cc.resample_time_s[1] / self.dt)
         self.cmd_timer[env_ids] = torch.randint(lo, hi + 1, (n,), device=dev)
+        if self.command_schedule is not None:
+            commands, steps = self.command_schedule.sample(
+                env_ids, lp, self.cmd_task[env_ids], self.cmd_timer[env_ids])
+            self.cmd_task[env_ids] = commands
+            self.cmd_timer[env_ids] = steps
 
     # ------------------------------------------------------------------ disturbances
     def _push_robots(self):
@@ -826,6 +875,20 @@ class PushCartEnv(PushCartSimEnv):
             (self.level_tensor / max(self.level_max, 1)).expand(N).unsqueeze(1),
             self.base_lin_vel * self.obs_scales.lin_vel,
         ), -1)
+        # Torque-only failures can leave every reward finite while poisoning critic inputs.
+        # Check before clipping, which would otherwise conceal infinities. Actor history is
+        # checked in full because every stacked frame is passed to PPO on this step.
+        finite = (torch.isfinite(self.actor_hist).all(dim=(1, 2))
+                  & torch.isfinite(privileged).all(dim=1))
+        if not finite.all():
+            bad_ids = (~finite).nonzero(as_tuple=False).flatten().tolist()
+            raise FloatingPointError(f"Non-finite push-cart observation in environments {bad_ids}")
+        if getattr(self, "idle_correction", None) is not None:
+            # These are precisely the actor's measurements, not ts.cart_v or a simulator root velocity.
+            # Update once after the control step; the following action uses this history.
+            self.idle_correction.update(delayed[:, :3], delayed[:, 3], est,
+                                        homie_frame[:, 4:7] / self.obs_scales.ang_vel,
+                                        homie_frame[:, 7:10], task_command=self.cmd_task)
         self.hl_critic_obs = torch.cat((self.hl_obs, privileged), -1).clamp(-self.cfg.normalization.clip_observations, self.cfg.normalization.clip_observations)
 
     # ------------------------------------------------------------------ diagnostics

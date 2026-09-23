@@ -8,6 +8,7 @@ import numpy as np
 
 
 CART_QUALITY_SIGNALS = (
+    "idle_correction_gate", "idle_correction_ready", "idle_est_vx", "idle_est_vy", "idle_est_wz",
     "cart_fx", "cart_fy", "cart_fz", "cart_mx", "cart_my", "cart_mz", "cart_mz_left", "cart_mz_right",
     "cart_vx_band", "cart_vy_band", "cart_wz_band", "cart_fx_band", "cart_fy_band", "cart_mz_band",
     "cart_ref_vx", "cart_ref_vy", "cart_ref_wz", "cart_tilt_rad", "robot_tilt_rad", "wheel_lift_m",
@@ -85,6 +86,90 @@ def _p95(a) -> float:
     return float(np.percentile(a, 95)) if len(a) else float("nan")
 
 
+def _time_series(t, *values):
+    """Validate the sampling clock without silently sorting or removing missing data."""
+    t = np.asarray(t, dtype=float)
+    arrays = [np.asarray(value, dtype=float) for value in values]
+    if t.ndim != 1 or any(a.ndim != 1 or len(a) != len(t) for a in arrays):
+        raise ValueError("time and signal arrays must be one-dimensional with equal length")
+    if not np.isfinite(t).all() or (np.diff(t) <= 0).any():
+        raise ValueError("timestamps must be finite and strictly increasing")
+    return (t, *arrays)
+
+
+def _continuous_intervals(t, nominal_dt=None):
+    """Reject gaps exceeding 1.5 nominal sample periods in full-rate bench traces."""
+    dt = np.diff(t)
+    if not len(dt):
+        return np.zeros(0, dtype=bool)
+    if nominal_dt is None:
+        nominal_dt = float(np.median(dt))
+    return dt <= 1.5 * nominal_dt + 1e-9
+
+
+def _window_error_metrics(t, error, valid, start, end, *, discrete=False):
+    """Statistics on (start, end], with integrals that never bridge invalid samples.
+
+    Continuous errors use trapezoidal quadrature, clipped at window boundaries. Discrete
+    reward costs use their right endpoint value for each control interval; an invalid prior
+    cost does not discard the next valid transition. Coverage excludes invalid intervals and
+    sampling gaps; unobserved duration is not zero error.
+    """
+    valid = np.asarray(valid, dtype=bool) & np.isfinite(error)
+    sample = valid & (t > start + 1e-9) & (t <= end + 1e-9)
+    out = {"samples": int(sample.sum()), "rmse": _rms(error[sample]) if sample.any() else None,
+           "mean": float(np.mean(error[sample])) if sample.any() else None,
+           "iae": None, "ise": None, "integral": None, "valid_duration_s": 0.0, "coverage": 0.0}
+    requested = max(0.0, float(end - start))
+    if len(t) < 2 or requested == 0:
+        return out
+    left = np.maximum(t[:-1], start)
+    right = np.minimum(t[1:], end)
+    interval = valid[1:] & _continuous_intervals(t) & (right > left)
+    if not discrete:
+        interval &= valid[:-1]
+    if not interval.any():
+        return out
+    dt = (right - left)[interval]
+    duration = float(dt.sum())
+    out.update(valid_duration_s=duration, coverage=min(1.0, duration / requested))
+    if discrete:
+        value = error[1:][interval]
+        out.update(iae=float(np.sum(dt * np.abs(value))), ise=float(np.sum(dt * value ** 2)),
+                   integral=float(np.sum(dt * value)))
+    else:
+        base = t[:-1][interval]
+        spacing = np.diff(t)[interval]
+        y0, y1 = error[:-1][interval], error[1:][interval]
+        a = y0 + (y1 - y0) * (left[interval] - base) / spacing
+        b = y0 + (y1 - y0) * (right[interval] - base) / spacing
+        out.update(iae=float(np.sum(dt * (np.abs(a) + np.abs(b)) * .5)),
+                   ise=float(np.sum(dt * (a ** 2 + b ** 2) * .5)),
+                   integral=float(np.sum(dt * (a + b) * .5)))
+    return out
+
+
+def reference_tracking_metrics(t, actual, reference, t_step: float, transient_s: float = 1.5) -> dict:
+    """Tracking of the *varying* reference, separate from its own rise/settling times.
+
+    These are raw velocity errors, without envelope smoothing. Each integral is restricted to
+    valid adjacent observations; coverage reports the fraction of the requested window observed.
+    """
+    t, actual, reference = _time_series(t, actual, reference)
+    if not math.isfinite(t_step) or not math.isfinite(transient_s) or transient_s < 0:
+        raise ValueError("t_step must be finite and transient_s finite and nonnegative")
+    end = max(t_step, float(t[-1])) if len(t) else t_step
+    valid = np.isfinite(actual) & np.isfinite(reference)
+    error = actual - reference
+    out = {}
+    for name, start, stop in (("full", t_step, end), ("transient", t_step, t_step + transient_s),
+                              ("post", t_step + transient_s, end)):
+        metrics = _window_error_metrics(t, error, valid, start, stop)
+        for key in ("rmse", "iae", "ise", "valid_duration_s", "coverage"):
+            out[f"reference_tracking_{name}_{key}"] = metrics[key]
+    return out
+
+
 # ---------------------------------------------------------------------------- path following
 
 def path_metrics(trace: Trace, path, follower_info: dict, overload_thresholds: dict | None = None) -> dict:
@@ -141,17 +226,17 @@ def path_metrics(trace: Trace, path, follower_info: dict, overload_thresholds: d
     return res
 
 
-def cart_quality_metrics(trace: Trace, start_s: float = 0.0) -> dict:
+def cart_quality_metrics(trace: Trace, start_s: float = 0.0,
+                        response_window: tuple[float, float] | None = None) -> dict:
     """Full-rate diagnostics. Missing telemetry stays missing, never zero.
 
     Bands exclude warmup and the caller's transient window. Geometric peaks cover the entire run,
     including warmup and failures. Force peaks mean sampled peaks, not continuous-time maxima.
     """
+    t, = _time_series(trace.t)
     ready = trace.telemetry_series("quality_ready")
-    if not np.isfinite(ready).any():
-        return {}
-    selected = np.isfinite(ready) & (ready > 0.5) & (np.asarray(trace.t) >= start_s)
-    out = {"quality_samples": int(selected.sum())}
+    selected = np.isfinite(ready) & (ready > 0.5) & (t >= start_s)
+    out = {"quality_samples": int(selected.sum())} if np.isfinite(ready).any() else {}
     for name in ("cart_tilt_rad", "robot_tilt_rad", "wheel_lift_m"):
         values = trace.telemetry_series(name)
         values = values[np.isfinite(values)]
@@ -179,7 +264,8 @@ def cart_quality_metrics(trace: Trace, start_s: float = 0.0) -> dict:
         if len(values):
             out[f"{name}_mean"] = float(np.mean(values))
     response_ready = trace.telemetry_series("cart_response_ready")
-    response_selected = np.isfinite(response_ready) & (response_ready > .5) & (np.asarray(trace.t) >= start_s)
+    response_valid = np.isfinite(response_ready) & (response_ready > .5)
+    response_selected = response_valid & (t >= start_s)
     for axis in ("vx", "vy", "wz"):
         values = trace.telemetry_series(f"cart_response_error_{axis}")
         values = values[response_selected & np.isfinite(values)]
@@ -189,6 +275,23 @@ def cart_quality_metrics(trace: Trace, start_s: float = 0.0) -> dict:
     response_cost = response_cost[response_selected & np.isfinite(response_cost)]
     if len(response_cost):
         out["cart_response_error_cost_mean"] = float(np.mean(response_cost))
+    if response_window is not None:
+        window_start, window_end = map(float, response_window)
+        if not math.isfinite(window_start) or not math.isfinite(window_end) or window_end < window_start:
+            raise ValueError("response_window boundaries must be finite and end >= start")
+        windows = (("transient", window_end), ("full", max(window_start, float(t[-1])) if len(t) else window_start))
+        for name, end in windows:
+            for axis in ("vx", "vy", "wz"):
+                values = trace.telemetry_series(f"cart_response_error_{axis}")
+                metrics = _window_error_metrics(t, values, response_valid, window_start, end)
+                for key in ("rmse", "iae", "ise", "valid_duration_s", "coverage"):
+                    out[f"cart_response_error_{axis}_{key}_{name}"] = metrics[key]
+            values = trace.telemetry_series("cart_response_error_cost")
+            metrics = _window_error_metrics(t, values, response_valid, window_start, end, discrete=True)
+            out[f"cart_response_error_cost_mean_{name}"] = metrics["mean"]
+            out[f"cart_response_error_cost_integral_{name}"] = metrics["integral"]
+            out[f"cart_response_{name}_valid_duration_s"] = metrics["valid_duration_s"]
+            out[f"cart_response_{name}_coverage"] = metrics["coverage"]
     for axis in ("vx", "vy", "wz"):
         values = np.asarray(getattr(trace, axis), dtype=float)
         ref = trace.telemetry_series(f"cart_ref_{axis}")
@@ -316,57 +419,141 @@ def moving_average(y, window: int, t=None):
 
 
 def step_response_metrics(t, y, t_step: float, y0: float, y1: float, band: float | None = None,
-                          ss_window_s: float = 2.0, smooth_s: float = 0.0) -> dict:
+                          ss_window_s: float = 2.0, smooth_s: float = 0.0,
+                          settling_dwell_s: float = 0.5) -> dict:
     """Classic step metrics of a signal ``y(t)`` that should move from ``y0`` to ``y1`` at ``t_step``.
 
     rise_time: 10 % -> 90 % of the step; settling_time: from t_step until |y - y1| stays inside ``band``
     (default 10 % of the step, at least 0.05); overshoot: max excursion past y1 in the step direction / |step|;
     ss_error: mean(y) - y1 over the last ``ss_window_s`` seconds. ``smooth_s`` > 0 applies a centred moving
     average of that length first (a legged robot's velocity oscillates with the gait; the metrics describe the
-    envelope, not the steps).
+    envelope, not the steps). Settling must be observed for ``settling_dwell_s`` and persist
+    through the last observed sample; missing data or a sampling gap interrupts confirmation.
     """
-    t, y = np.asarray(t, dtype=float), np.asarray(y, dtype=float)
+    t, y = _time_series(t, y)
+    if not all(math.isfinite(float(v)) for v in (t_step, y0, y1, ss_window_s, smooth_s, settling_dwell_s)):
+        raise ValueError("step-response parameters must be finite")
+    if ss_window_s <= 0 or smooth_s < 0 or settling_dwell_s < 0:
+        raise ValueError("ss_window_s must be positive; smooth_s and settling_dwell_s nonnegative")
+    if band is not None and (not math.isfinite(float(band)) or band < 0):
+        raise ValueError("band must be finite and nonnegative")
+    nominal_dt = float(np.median(np.diff(t))) if len(t) > 1 else None
     if smooth_s > 0 and len(t) > 2:
-        t, y = moving_average(y, int(round(smooth_s / max(float(np.median(np.diff(t))), 1e-9))), t)
-    m = t >= t_step
+        t, y = moving_average(y, int(round(smooth_s / max(nominal_dt, 1e-9))), t)
+    m = t >= t_step - 1e-9
     t, y = t[m], y[m]
+    continuous = _continuous_intervals(t, nominal_dt=nominal_dt)
     step = y1 - y0
-    out = {"rise_time": None, "settling_time": None, "overshoot": None, "ss_error": None, "ss_std": None}
-    if len(t) < 2:
+    out = {"rise_time": None, "settling_time": None, "overshoot": None, "ss_error": None, "ss_std": None,
+           "settling_confirmed": False, "settling_confirmed_time": None,
+           "settling_dwell_s": float(settling_dwell_s)}
+    if len(t) == 0:
         return out
     tail = t >= t[-1] - ss_window_s
-    out["ss_error"] = float(np.mean(y[tail]) - y1)
-    out["ss_std"] = float(np.std(y[tail]))
+    if np.isfinite(y[tail]).all():
+        out["ss_error"] = float(np.mean(y[tail]) - y1)
+        out["ss_std"] = float(np.std(y[tail]))
+    band = max(0.1 * abs(step), 0.05) if band is None else band
+    inside = np.isfinite(y) & (np.abs(y - y1) <= band)
+    # The final in-band run needs an observed dwell; a lone endpoint cannot prove settling.
+    if inside[-1]:
+        last_out = np.where(~inside)[0]
+        idx = 0 if len(last_out) == 0 else last_out[-1] + 1
+        gaps = np.flatnonzero(~continuous)
+        if len(gaps):
+            idx = max(idx, int(gaps[-1]) + 1)
+        confirmed = np.flatnonzero(t[idx:] - t[idx] + 1e-9 >= settling_dwell_s)
+        if len(confirmed):
+            out["settling_time"] = max(0.0, float(t[idx] - t_step))
+            out["settling_confirmed"] = True
+            out["settling_confirmed_time"] = max(0.0, float(t[idx + confirmed[0]] - t_step))
     if abs(step) < 1e-9:
         return out
     prog = (y - y0) / step                                   # 0 at y0, 1 at y1
-    i10 = np.argmax(prog >= 0.1) if np.any(prog >= 0.1) else None
-    i90 = np.argmax(prog >= 0.9) if np.any(prog >= 0.9) else None
+    finite = np.isfinite(prog)
+    i10 = np.argmax(finite & (prog >= 0.1)) if np.any(finite & (prog >= 0.1)) else None
+    i90 = np.argmax(finite & (prog >= 0.9)) if np.any(finite & (prog >= 0.9)) else None
     if i10 is not None and i90 is not None and i90 >= i10:
-        out["rise_time"] = float(t[i90] - t[i10])
-    band = max(0.1 * abs(step), 0.05) if band is None else band
-    inside = np.abs(y - y1) <= band
-    # settling time: first index after which every later sample is inside the band
-    if inside.any():
-        last_out = np.where(~inside)[0]
-        idx = 0 if len(last_out) == 0 else last_out[-1] + 1
-        if idx < len(t):
-            out["settling_time"] = float(t[idx] - t_step)
-    out["overshoot"] = float(max(0.0, np.max(prog) - 1.0))
+        if finite[i10:i90 + 1].all() and continuous[i10:i90].all():
+            out["rise_time"] = float(t[i90] - t[i10])
+    if finite.any():
+        out["overshoot"] = float(max(0.0, np.max(prog[finite]) - 1.0))
     return out
 
 
 def stopping_distance(t, x, y, speed, t_step: float, v_stop: float = 0.05) -> float | None:
-    """Distance travelled after ``t_step`` until the speed first drops below ``v_stop``."""
-    t = np.asarray(t, dtype=float)
-    m = t >= t_step
-    if not m.any():
-        return None
-    xs, ys, sp = np.asarray(x)[m], np.asarray(y)[m], np.asarray(speed)[m]
-    below = np.where(sp < v_stop)[0]
-    end = int(below[0]) if len(below) else len(xs) - 1
-    xy = np.stack([xs[: end + 1], ys[: end + 1]], axis=1)
-    return float(np.sum(np.linalg.norm(np.diff(xy, axis=0), axis=1))) if len(xy) > 1 else 0.0
+    """Legacy first-low-speed distance; missing crossings/positions return ``None``."""
+    return stopping_metrics(t, x, y, speed, t_step, v_stop, dwell_s=0.0)["first_low_distance"]
+
+
+def stopping_metrics(t, x, y, speed, t_step: float, v_stop: float = 0.05,
+                     dwell_s: float = 0.5) -> dict:
+    """Confirm the final uninterrupted low-speed run after an observed ``dwell_s``.
+
+    A prior dwell followed by a rebound does not establish the task-level stopping result.
+    ``first_confirmed_*`` preserves that earlier event as a diagnostic. Invalid samples and
+    sampling gaps break the dwell; missing positions make the associated path length unknown.
+    ``rebound_count`` remains a sample count, while ``rebound_events`` counts low-to-high edges.
+    """
+    if dwell_s < 0 or not math.isfinite(float(dwell_s)):
+        raise ValueError("dwell_s must be finite and nonnegative")
+    if not math.isfinite(float(t_step)) or not math.isfinite(float(v_stop)) or v_stop <= 0:
+        raise ValueError("t_step must be finite and v_stop positive and finite")
+    t, x, y, speed = _time_series(t, x, y, speed)
+    if (speed[np.isfinite(speed)] < 0).any():
+        raise ValueError("speed must be a nonnegative magnitude")
+    selected = t >= t_step - 1e-9
+    out = {"first_low_time": None, "first_low_distance": None, "confirmed": False,
+           "confirmed_time": None, "confirmed_distance": None, "post_confirm_travel": None,
+           "first_confirmed_time": None, "first_confirmed_distance": None, "post_first_confirm_travel": None,
+           "rebound_count": 0, "rebound_events": 0, "invalid_samples": 0,
+           "dwell_s": float(dwell_s), "v_stop": float(v_stop)}
+    if not selected.any():
+        return out
+    continuous = _continuous_intervals(t)
+    # Preserve the original clock's nominal cadence when the post-step segment is short.
+    first = int(np.flatnonzero(selected)[0])
+    continuous = continuous[first:]
+    ts, xs, ys, sp = t[selected], x[selected], y[selected], speed[selected]
+    valid = np.isfinite(xs) & np.isfinite(ys) & np.isfinite(sp)
+    low = valid & (sp < v_stop)
+    out["invalid_samples"] = int((~valid).sum())
+    xy = np.stack((xs, ys), axis=1)
+
+    def distance(begin, end):
+        points = xy[begin:end + 1]
+        if not np.isfinite(points).all() or not continuous[begin:end].all():
+            return None
+        return float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+
+    low_idx = np.flatnonzero(low)
+    if not len(low_idx):
+        return out
+    first_low = int(low_idx[0])
+    out["first_low_time"] = max(0.0, float(ts[first_low] - t_step))
+    out["first_low_distance"] = distance(0, first_low)
+    high = valid & (sp >= v_stop)
+    out["rebound_count"] = int(high[first_low + 1:].sum())
+    out["rebound_events"] = int((low[:-1] & high[1:] & continuous).sum())
+    run_start, run_confirmed = None, None
+    for j in range(len(ts)):
+        if not low[j]:
+            run_start, run_confirmed = None, None
+            continue
+        if run_start is None or (j and not continuous[j - 1]):
+            run_start, run_confirmed = j, None
+        if run_confirmed is None and ts[j] - ts[run_start] + 1e-9 >= dwell_s:
+            run_confirmed = j
+            if out["first_confirmed_time"] is None:
+                out["first_confirmed_time"] = max(0.0, float(ts[j] - t_step))
+                out["first_confirmed_distance"] = distance(0, j)
+                out["post_first_confirm_travel"] = distance(j, len(ts) - 1)
+    if run_confirmed is not None:
+        out["confirmed"] = True
+        out["confirmed_time"] = max(0.0, float(ts[run_confirmed] - t_step))
+        out["confirmed_distance"] = distance(0, run_confirmed)
+        out["post_confirm_travel"] = distance(run_confirmed, len(ts) - 1)
+    return out
 
 
 # ---------------------------------------------------------------------------- aggregation

@@ -37,7 +37,8 @@ class RunStore:
 
 
 def _policies(args, cfg):
-    level = int(getattr(args, "level", None) or cfg["defaults"].get("level", 17))
+    requested_level = getattr(args, "level", None)
+    level = int(cfg["defaults"].get("level", 17) if requested_level is None else requested_level)
     homie = getattr(args, "homie_checkpoint", None)
     out = []
     for spec in args.policies:
@@ -221,7 +222,15 @@ def exp_step(args, cfg) -> Path:
                 res = run_step(policy, step, cond, cfg, viewer=viewer, label=label)
                 store.add(res)
                 m = res["metrics"]
-                extra = f" | stop {m['stopping_distance']:.2f} m" if m.get("stopping_distance") is not None else ""
+                extra = ""
+                if step.get("stopping"):
+                    distance = m.get("stopping_distance")
+                    if m.get("stopping_confirmed"):
+                        dist_text = f"{distance:.2f} m" if distance is not None else "distance unavailable"
+                        extra = f" | stop confirmed: {dist_text}, {m['stopping_time']:.2f} s"
+                    else:
+                        extra = " | stop UNCONFIRMED"
+                    extra += f" | rebounds {m.get('stop_rebound_events', 0)}"
                 extra += f" | drift {m['drift_distance']:.2f} m" if m.get("drift_distance") is not None else ""
                 fmt = lambda v: "-" if v is None else f"{v:.2f}"  # noqa: E731
                 fmt3 = lambda v: "-" if v is None else f"{v:.3f}"  # noqa: E731

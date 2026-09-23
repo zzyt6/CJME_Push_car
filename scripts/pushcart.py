@@ -111,8 +111,8 @@ def main(argv=None):
     export.add_argument("--level", type=int, default=17, help="curriculum level whose correction scale is documented")
 
     train_parser = sub.add_parser("train", help="phase B training via NVIDIA's rsl_rl train.py (extra args forwarded, e.g. --num_envs 4096 --headless --level 0)")
-    train_parser.add_argument("--quality_profile", choices=["diagnostic", "ripple", "wrench", "combined"],
-                              help="cart quality: legacy ripple/wrench, or combined split linear/yaw ripple + response tracking + wrench")
+    train_parser.add_argument("--quality_profile", choices=["diagnostic", "ripple", "wrench", "combined", "v4"],
+                              help="v4: combined speed quality, stop/go/turn sequences and observable idle correction")
     sub.add_parser("play", help="play a high-level checkpoint via NVIDIA's rsl_rl play.py (--checkpoint <run>/model_N.pt)")
 
     ev = sub.add_parser("eval", help="Isaac Lab: fixed scenario suite for a high-level checkpoint (or passthrough baseline without --checkpoint)")
@@ -143,8 +143,18 @@ def main(argv=None):
     envsmoke.add_argument("--no_force_clip", action="store_true", help="diagnostic: no clipping of grasp forces in rewards")
     envsmoke.add_argument("--no_stall", action="store_true", help="diagnostic: disable the single-wheel stall disturbance")
     envsmoke.add_argument("--no_kick", action="store_true", help="diagnostic: disable the cart velocity kick disturbance")
-    envsmoke.add_argument("--quality_profile", choices=["diagnostic", "ripple", "wrench", "combined"],
+    envsmoke.add_argument("--no_robot_push", action="store_true", help="diagnostic: disable robot pushes, retaining observation noise")
+    envsmoke.add_argument("--no_idle_correction", action="store_true", help="diagnostic: V4 command distribution with legacy idle gate")
+    envsmoke.add_argument("--fixed_command", nargs=3, type=float, metavar=("VX", "VY", "WZ"), help="diagnostic: fixed task command")
+    envsmoke.add_argument("--payload", type=float, help="diagnostic: fixed payload kg")
+    envsmoke.add_argument("--quality_profile", choices=["diagnostic", "ripple", "wrench", "combined", "v4"],
                           help="exercise V3.1 cart-quality filters and rewards")
+
+    calibration = sub.add_parser("wrenchcal", help="Isaac no-cart static/dynamic and known-load palm wrench validation")
+    calibration.add_argument("--num_envs", type=int, default=4)
+    calibration.add_argument("--steps", type=int, default=180, help="control steps per calibration phase")
+    calibration.add_argument("--checkpoint", type=Path)
+    calibration.add_argument("--output", type=Path, help="new output directory; default: timestamped logs/bench directory")
 
     smoke = sub.add_parser("smoke", help="headless HOMIE-driven check of the robot / cart scene (Isaac Lab)")
     smoke.add_argument("--mode", choices=["robot", "cart"], default="cart")
@@ -161,7 +171,7 @@ def main(argv=None):
     smoke.add_argument("--cart_mass", type=float, help="override the cart base_link mass [kg] at runtime")
 
     args, extra = parser.parse_known_args(argv)
-    if extra and args.command not in ("pack", "teleop", "smoke", "cartdiag", "stance", "envsmoke", "eval", "train", "play"):
+    if extra and args.command not in ("pack", "teleop", "smoke", "cartdiag", "stance", "envsmoke", "eval", "wrenchcal", "train", "play"):
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
 
     if args.command == "export":
@@ -230,7 +240,7 @@ def main(argv=None):
             return 0
         run_mujoco_teleop(args)
         return 0
-    if args.command in ("teleop", "smoke", "cartdiag", "stance", "envsmoke", "eval"):
+    if args.command in ("teleop", "smoke", "cartdiag", "stance", "envsmoke", "eval", "wrenchcal"):
         from isaaclab.app import AppLauncher
         app_parser = argparse.ArgumentParser(add_help=False)
         AppLauncher.add_app_launcher_args(app_parser)
@@ -249,6 +259,10 @@ def main(argv=None):
             elif args.command == "stance":
                 from homie_pushcart.stance import run_stance
                 run_stance(app_args, launcher, ROOT)
+            elif args.command == "wrenchcal":
+                from homie_pushcart.wrench_calibration import run_wrench_calibration
+                result = run_wrench_calibration(app_args, launcher, ROOT)
+                code = 0 if result["result"] == "PASS" else 2
             elif args.command == "envsmoke":
                 from homie_pushcart.env_smoke import run_env_smoke
                 result = run_env_smoke(app_args, launcher, ROOT)

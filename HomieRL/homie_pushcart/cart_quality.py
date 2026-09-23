@@ -11,22 +11,25 @@ import math
 import torch
 
 
-QUALITY_PROFILES = ("diagnostic", "ripple", "wrench", "combined")
+QUALITY_PROFILES = ("diagnostic", "ripple", "wrench", "combined", "v4")
 QUALITY_REWARD_NAMES = ("cart_ripple", "cart_lin_ripple", "cart_yaw_ripple",
                         "cart_response_error", "cart_wrench_osc")
 
 
 def quality_profile_overrides(profile: str) -> dict:
-    """Combined uses independent speed costs; single-term profiles retain V3.1 settings."""
+    """V4 combines speed quality, structured transients and observable idle correction."""
     if profile not in QUALITY_PROFILES:
         raise ValueError(f"Unknown quality profile {profile!r}; choose {QUALITY_PROFILES}")
     return {
         "quality.enabled": True,
+        "rewards.force_rate_seed_on_reset": profile == "v4",
+        "commands.sequence_enabled": profile == "v4",
+        "idle_correction.enabled": profile == "v4",
         "rewards.scales.cart_ripple": -0.05 if profile == "ripple" else 0.0,
-        "rewards.scales.cart_lin_ripple": -0.10 if profile == "combined" else 0.0,
-        "rewards.scales.cart_yaw_ripple": -0.15 if profile == "combined" else 0.0,
-        "rewards.scales.cart_response_error": -0.10 if profile == "combined" else 0.0,
-        "rewards.scales.cart_wrench_osc": -0.02 if profile in ("wrench", "combined") else 0.0,
+        "rewards.scales.cart_lin_ripple": -0.10 if profile in ("combined", "v4") else 0.0,
+        "rewards.scales.cart_yaw_ripple": -0.15 if profile in ("combined", "v4") else 0.0,
+        "rewards.scales.cart_response_error": -0.10 if profile in ("combined", "v4") else 0.0,
+        "rewards.scales.cart_wrench_osc": -0.02 if profile in ("wrench", "combined", "v4") else 0.0,
     }
 
 
@@ -124,7 +127,11 @@ class CartQualityTracker:
         """
         error_w = rotate_planar(velocity_c - reference_c, yaw)
         wrench_w = torch.stack((force_w[:, 0], force_w[:, 1], moment_w[:, 2]), dim=-1)
-        finite = torch.isfinite(torch.cat((error_w, wrench_w), dim=-1)).all(dim=-1)
+        # A complete wrench is one physical sample, including unscored vertical/roll/pitch
+        # components. A NaN in Fz or Mx/My must not silently leave the speed costs enabled.
+        finite = torch.isfinite(torch.cat((error_w, force_w, moment_w), dim=-1)).all(dim=-1)
+        # Quality is assessed for a complete physical sample. A bad wrench invalidates its
+        # speed costs too; this local mask does not itself remove a transition from PPO storage.
         valid = finite if valid is None else valid & finite
         wrench_w = torch.maximum(torch.minimum(wrench_w, self.wrench_clip), -self.wrench_clip)
         sample = torch.cat((error_w, wrench_w), dim=-1)

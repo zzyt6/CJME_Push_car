@@ -1,0 +1,767 @@
+{
+  "source_model": "E:\\CJME_Push_car\\assets\\g1_pushcart\\mujoco\\g1_pushcart.xml",
+  "source_snapshots": "../snapshots.json",
+  "source_snapshots_sha256": "9937faefa6b727411ac38a11c9e60ef00bfa1f74d5b7fa5acb41a88b4d54f00a",
+  "measurement_scope": "trained checkpoint replay in MuJoCo, not original Isaac/PhysX play recording",
+  "high_level_checkpoint": {
+    "path": "E:\\CJME_Push_car\\logs\\rsl_rl\\homie_pushcart\\2026-09-21_16-56-46_v3_1_speed_quality_scratch\\model_19999.pt",
+    "sha256": "615ac261e117cf1caeac6b8ba0c9b37fae7c8ad2bf7817853e53eacb37870c44",
+    "iteration": 19999
+  },
+  "low_level_checkpoint": {
+    "path": "E:\\CJME_Push_car\\logs\\rsl_rl\\homie_g1\\2026-09-14_15-10-07_my_policy\\model_60000.pt",
+    "sha256": "563125eaa4ff551a8573451e4babcee4359d3162efd31a34e199d1387a38ea36",
+    "iteration": 60000
+  },
+  "mujoco_version": "3.8.0",
+  "method": "Native MuJoCo offscreen rendering of replayed snapshot qpos, validated against saved world body poses.",
+  "visual_only_changes": [
+    "Only original group-1 wrist and hand meshes plus original cart visual mesh displayed.",
+    "Cart visual mesh rendered opaque and spatially cropped to original handle surface by metric-depth masking: cart-local z >= 0.82 m and x <= -0.35 m.",
+    "Collision proxies, auxiliary red cart bars, floor and other body geometry hidden.",
+    "Background pixels replaced by exact RGB 0,255,0 using native segmentation.",
+    "Lighting and cameras chosen for hand detail. Original mesh geometry, poses and source files unchanged."
+  ],
+  "photos": [
+    {
+      "side": "both",
+      "azimuth_deg": 180,
+      "elevation_deg": -30,
+      "distance_m": 0.48,
+      "lookat_world_m": [
+        0.8142122439274158,
+        0.03289034864122776,
+        0.9281844126502232
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.2299044132232666,
+        0.03289034962654114,
+        1.1681843996047974
+      ],
+      "camera_forward_world": [
+        -0.8660253882408142,
+        1.0605752472130298e-16,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.5,
+        6.123234262925839e-17,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 365508,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98,
+        100
+      ],
+      "frame": 1,
+      "solver_time_s": 1.9999999999999793,
+      "file": "frame_01_both_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "38b86d684f9d621bc20011851f91de009722ff5681fc1b86b22e2a01f97642f0"
+    },
+    {
+      "side": "left",
+      "azimuth_deg": 140,
+      "elevation_deg": -30,
+      "distance_m": 0.3,
+      "lookat_world_m": [
+        0.8091733605024932,
+        0.10753813852538675,
+        0.9268986935914328
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.008197546005249,
+        -0.059462979435920715,
+        1.0768986940383911
+      ],
+      "camera_forward_world": [
+        -0.663413941860199,
+        0.5566704273223877,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.3830222189426422,
+        0.32139381766319275,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 557733,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70
+      ],
+      "frame": 1,
+      "solver_time_s": 1.9999999999999793,
+      "file": "frame_01_left_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "38b86d684f9d621bc20011851f91de009722ff5681fc1b86b22e2a01f97642f0"
+    },
+    {
+      "side": "right",
+      "azimuth_deg": 220,
+      "elevation_deg": -30,
+      "distance_m": 0.3,
+      "lookat_world_m": [
+        0.8192511273523382,
+        -0.04175744124293124,
+        0.9294701317090137
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.018275260925293,
+        0.125243678689003,
+        1.079470157623291
+      ],
+      "camera_forward_world": [
+        -0.663413941860199,
+        -0.5566704273223877,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.3830222189426422,
+        -0.32139381766319275,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 547154,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98,
+        100
+      ],
+      "frame": 1,
+      "solver_time_s": 1.9999999999999793,
+      "file": "frame_01_right_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "38b86d684f9d621bc20011851f91de009722ff5681fc1b86b22e2a01f97642f0"
+    },
+    {
+      "side": "both",
+      "azimuth_deg": 180,
+      "elevation_deg": -30,
+      "distance_m": 0.48,
+      "lookat_world_m": [
+        1.0932387140608537,
+        0.043350121207350295,
+        0.9278796363862385
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.5089309215545654,
+        0.04335012286901474,
+        1.167879581451416
+      ],
+      "camera_forward_world": [
+        -0.8660253882408142,
+        1.0605752472130298e-16,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.5,
+        6.123234262925839e-17,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 363538,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98,
+        100
+      ],
+      "frame": 2,
+      "solver_time_s": 2.9999999999999583,
+      "file": "frame_02_both_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "29fd16881b5a1eb4e14ab56fc04f394b5b34363cb9b0f8a6d287c53dc3a6e40c"
+    },
+    {
+      "side": "left",
+      "azimuth_deg": 140,
+      "elevation_deg": -30,
+      "distance_m": 0.3,
+      "lookat_world_m": [
+        1.0905653647780382,
+        0.11732036308128302,
+        0.9286102660648416
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.289589524269104,
+        -0.04968075826764107,
+        1.0786103010177612
+      ],
+      "camera_forward_world": [
+        -0.663413941860199,
+        0.5566704273223877,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.3830222189426422,
+        0.32139381766319275,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 543720,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70
+      ],
+      "frame": 2,
+      "solver_time_s": 2.9999999999999583,
+      "file": "frame_02_left_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "29fd16881b5a1eb4e14ab56fc04f394b5b34363cb9b0f8a6d287c53dc3a6e40c"
+    },
+    {
+      "side": "right",
+      "azimuth_deg": 220,
+      "elevation_deg": -30,
+      "distance_m": 0.3,
+      "lookat_world_m": [
+        1.0959120633436692,
+        -0.030620120666582436,
+        0.9271490067076354
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.294936180114746,
+        0.13638100028038025,
+        1.0771490335464478
+      ],
+      "camera_forward_world": [
+        -0.663413941860199,
+        -0.5566704273223877,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.3830222189426422,
+        -0.32139381766319275,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 560145,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98,
+        100
+      ],
+      "frame": 2,
+      "solver_time_s": 2.9999999999999583,
+      "file": "frame_02_right_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "29fd16881b5a1eb4e14ab56fc04f394b5b34363cb9b0f8a6d287c53dc3a6e40c"
+    },
+    {
+      "side": "both",
+      "azimuth_deg": 180,
+      "elevation_deg": -30,
+      "distance_m": 0.48,
+      "lookat_world_m": [
+        1.3868881121118621,
+        0.07451000129235202,
+        0.9274919954371715
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.8025803565979004,
+        0.07451000064611435,
+        1.1674920320510864
+      ],
+      "camera_forward_world": [
+        -0.8660253882408142,
+        1.0605752472130298e-16,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.5,
+        6.123234262925839e-17,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 363890,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98,
+        100
+      ],
+      "frame": 3,
+      "solver_time_s": 3.999999999999937,
+      "file": "frame_03_both_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "87736e124f99b7a7737b08456643dc84cfaa69b1daba321de5ad0e597c69214d"
+    },
+    {
+      "side": "left",
+      "azimuth_deg": 140,
+      "elevation_deg": -30,
+      "distance_m": 0.3,
+      "lookat_world_m": [
+        1.383491418344292,
+        0.14720695881104767,
+        0.9285124993395545
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.5825155973434448,
+        -0.01979416236281395,
+        1.0785125494003296
+      ],
+      "camera_forward_world": [
+        -0.663413941860199,
+        0.5566704273223877,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.3830222189426422,
+        0.32139381766319275,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 551949,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70
+      ],
+      "frame": 3,
+      "solver_time_s": 3.999999999999937,
+      "file": "frame_03_left_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "87736e124f99b7a7737b08456643dc84cfaa69b1daba321de5ad0e597c69214d"
+    },
+    {
+      "side": "right",
+      "azimuth_deg": 220,
+      "elevation_deg": -30,
+      "distance_m": 0.3,
+      "lookat_world_m": [
+        1.3902848058794324,
+        0.0018130437736563858,
+        0.9264714915347886
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.5893089771270752,
+        0.16881415247917175,
+        1.0764714479446411
+      ],
+      "camera_forward_world": [
+        -0.663413941860199,
+        -0.5566704273223877,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.3830222189426422,
+        -0.32139381766319275,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 552260,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98,
+        100
+      ],
+      "frame": 3,
+      "solver_time_s": 3.999999999999937,
+      "file": "frame_03_right_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "87736e124f99b7a7737b08456643dc84cfaa69b1daba321de5ad0e597c69214d"
+    },
+    {
+      "side": "both",
+      "azimuth_deg": 180,
+      "elevation_deg": -30,
+      "distance_m": 0.48,
+      "lookat_world_m": [
+        1.6796053240754154,
+        0.0986404393823182,
+        0.9265861122249668
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        2.0952975749969482,
+        0.09864044189453125,
+        1.16658616065979
+      ],
+      "camera_forward_world": [
+        -0.8660253882408142,
+        1.0605752472130298e-16,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.5,
+        6.123234262925839e-17,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 363166,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98,
+        100
+      ],
+      "frame": 4,
+      "solver_time_s": 4.999999999999916,
+      "file": "frame_04_both_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "75ce6a7f6a440f49500eae3c59bea35417fc3368f9ea7750d0bbceeeecd5d8ae"
+    },
+    {
+      "side": "left",
+      "azimuth_deg": 140,
+      "elevation_deg": -30,
+      "distance_m": 0.3,
+      "lookat_world_m": [
+        1.6740781652276138,
+        0.17080976183739172,
+        0.9269609981582866
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.8731024265289307,
+        0.00380864180624485,
+        1.0769610404968262
+      ],
+      "camera_forward_world": [
+        -0.663413941860199,
+        0.5566704273223877,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.3830222189426422,
+        0.32139381766319275,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 536895,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70
+      ],
+      "frame": 4,
+      "solver_time_s": 4.999999999999916,
+      "file": "frame_04_left_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "75ce6a7f6a440f49500eae3c59bea35417fc3368f9ea7750d0bbceeeecd5d8ae"
+    },
+    {
+      "side": "right",
+      "azimuth_deg": 220,
+      "elevation_deg": -30,
+      "distance_m": 0.3,
+      "lookat_world_m": [
+        1.6851324829232173,
+        0.026471116927244683,
+        0.9262112262916469
+      ],
+      "vertical_field_of_view_deg": 35,
+      "camera_position_world_m": [
+        1.8841567039489746,
+        0.1934722363948822,
+        1.0762112140655518
+      ],
+      "camera_forward_world": [
+        -0.663413941860199,
+        -0.5566704273223877,
+        -0.5
+      ],
+      "camera_up_world": [
+        -0.3830222189426422,
+        -0.32139381766319275,
+        0.8660253882408142
+      ],
+      "foreground_pixels": 564525,
+      "cart_surface_crop_in_cart_frame": {
+        "z_min_m": 0.82,
+        "x_max_m": -0.35
+      },
+      "background_rgb": [
+        0,
+        255,
+        0
+      ],
+      "visible_geom_ids": [
+        111,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98,
+        100
+      ],
+      "frame": 4,
+      "solver_time_s": 4.999999999999916,
+      "file": "frame_04_right_hands_greenscreen.png",
+      "width_px": 1600,
+      "height_px": 1000,
+      "replay_body_pose_max_abs_error": 0.0,
+      "qpos_sha256": "75ce6a7f6a440f49500eae3c59bea35417fc3368f9ea7750d0bbceeeecd5d8ae"
+    }
+  ]
+}

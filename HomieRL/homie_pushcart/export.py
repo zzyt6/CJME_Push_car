@@ -76,6 +76,7 @@ def export_checkpoint(checkpoint: Path, output_dir: Path | None = None, level: i
                           dynamic_axes={"actor_obs": {0: "batch"}, "hl_action": {0: "batch"}}, opset_version=17, dynamo=False)
         check = torch.jit.load(str(jit_path))(example)
     lp = level_params(level, task_cfg)
+    from homie_isaaclab.math_utils import class_to_dict
     interface = {
         "checkpoint": str(checkpoint), "iteration": hl.iteration,
         "rate_hz": 50, "actor_obs_dim": hl.num_actor_obs, "frames": task_cfg.env.actor_history, "frame_dim": HL_FRAME,
@@ -87,6 +88,13 @@ def export_checkpoint(checkpoint: Path, output_dir: Path | None = None, level: i
         "action_to_command": {
             "reference": f"cmd_ref += min(1, dt / {task_cfg.commands.ref_tau_s}) * (task_cmd - cmd_ref)  (tau 0: cmd_ref = task_cmd)",
             "idle_gate": f"gate = clip(|cmd_ref| / {task_cfg.actions.idle_gate_speed}, 0, 1)  (0: no gate); scales a[0:3] and a[3:18]",
+            "idle_correction": {
+                "config": class_to_dict(task_cfg.idle_correction),
+                "runtime": "homie_pushcart.idle_correction.IdleCorrectionTracker",
+                "inputs": "actor-visible handle pose, HIM estimated base velocity, IMU angular velocity and projected gravity; unscaled; known operator task command",
+                "timing": "reset history on episode reset; update once per observed control step; next action uses max(command gate, tracker.gate(cmd_ref, task_cmd))",
+                "network_contains_gate": False,
+            },
             "homie_cmd_target": "clip(cmd_ref + gate * a[0:3] * cmd_residual_scale, homie_cmd_limits)",
             "cmd_residual_scale": task_cfg.actions.cmd_residual_scale, "homie_cmd_limits": task_cfg.actions.homie_cmd_limits,
             "low_pass": f"homie_cmd += min(1, dt / {task_cfg.actions.cmd_filter_tau_s}) * (target - homie_cmd)",

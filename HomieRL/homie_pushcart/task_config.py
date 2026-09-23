@@ -8,7 +8,8 @@ Third revision (docs/push_cart_rl_plan_v3.md): the command residual is a feed-fo
 in v2, wz wide enough to reach HOMIE's full yaw range from any task command), the arms have a fixed scale and
 two jobs the residual cannot do (isolate the cart from gait / reaction transients, lead the torso in yaw
 transients), the cart follows a first-order *reference* instead of the raw step command, and the whole
-correction fades out at zero command. ``task_cfg_from_run`` restores the configuration a checkpoint was
+correction fades out at zero command by default. V4 opts into bounded, observation-based idle correction
+and mixed command sequences. ``task_cfg_from_run`` restores the configuration a checkpoint was
 trained with, so v2 and v3 checkpoints can be run side by side in MuJoCo.
 """
 from __future__ import annotations
@@ -49,6 +50,22 @@ class PushCartTaskCfg(BaseConfig):
         idle_gate_speed = 0.05
         delay_steps_max = 1                          # random 0..N step delay of the high-level action
 
+    class idle_correction:
+        # V4 opt-in; runtime uses the same delayed/noisy pose, HIM velocity and IMU as the actor.
+        enabled = False
+        window_s = 0.80
+        motion_on_m_s = 0.10
+        motion_off_m_s = 0.04
+        yaw_on_rad_s = 0.22
+        yaw_off_rad_s = 0.09
+        activation_s = 0.20
+        calm_hold_s = 0.40
+        max_gate = 0.25
+        near_zero_command = 0.025
+        gate_rise_tau_s = 0.15
+        gate_fall_tau_s = 0.25
+        recovery_window_s = 5.0              # only after a nonzero task; never opens from idle startup noise
+
     class observations:
         cart_pose_noise_pos_m = 0.02
         cart_pose_noise_yaw_rad = math.radians(2.0)
@@ -61,6 +78,14 @@ class PushCartTaskCfg(BaseConfig):
     class commands:
         resample_time_s = [4.0, 6.0]
         zero_prob = 0.2
+        # V4: sample an episode mode, retaining broad random commands alongside explicit transients.
+        sequence_enabled = False
+        stop_go_prob = 0.25
+        turn_reversal_prob = 0.25
+        move_time_s = [2.0, 4.0]
+        stop_hold_time_s = [3.0, 5.0]       # leave time for braking, confirmation and quiet standing
+        turn_time_s = [2.0, 4.0]
+        structured_speed_min_frac = 0.35
         # curriculum end points = what the robot + cart can physically do, so every commanded target is trackable
         # and the curriculum gates need no per-axis excuses. vx: 75 % of HOMIE. wz: HOMIE with the cart delivers
         # 0.38-0.44 rad/s at its 0.8 rad/s command limit (MuJoCo bench); the residual supplies the command
@@ -112,6 +137,7 @@ class PushCartTaskCfg(BaseConfig):
             homie_cmd_rate = -0.05
             homie_cmd_residual = -0.005
             termination = -2.0
+        force_rate_seed_on_reset = False             # V4 opt-in; old run configs retain their reward definition
         tracking_sigma = 0.1                         # exp(-err^2 / sigma): 0.1 m/s -> 0.90, 0.2 -> 0.67, 0.3 -> 0.41
         # The tracking terms compare a first-order low-passed cart velocity with the equally low-passed reference.
         # A rolling cart's measured yaw rate carries 0.18 rad/s RMS of caster contact / gait ripple (MuJoCo, 0.3 m/s):

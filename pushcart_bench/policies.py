@@ -71,10 +71,12 @@ class CartPolicyBase:
 
     # -- interface
     def describe(self) -> dict:
+        from homie_isaaclab.math_utils import class_to_dict
         return {"name": self.name, "kind": "two_stage" if self.hl_checkpoint else "passthrough", "tracks": self.tracks,
                 "hl_checkpoint": str(self.hl_checkpoint) if self.hl_checkpoint else None,
                 "hl_iteration": getattr(self.runner.hl, "iteration", None) if self.runner.hl is not None else None,
                 "homie_checkpoint": str(self.homie_checkpoint), "level": self.level,
+                "idle_correction": class_to_dict(self.runner.task_cfg.idle_correction),
                 "cart_quality": {**self.runner.quality.metadata(), "wrench_source": "mujoco_weld_jacobian",
                                  "moment_origin": "cart_assembly_com", "axes": "cart_heading_z_world",
                                  "sampling": "last_physics_substep_at_control_rate"}}
@@ -133,6 +135,12 @@ class CartPolicyBase:
                   c * moment[0] + s * moment[1], -s * moment[0] + c * moment[1], moment[2])
         out.update(dict(zip(("cart_fx", "cart_fy", "cart_fz", "cart_mx", "cart_my", "cart_mz"), map(float, wrench))))
         q = self.runner.quality
+        idle = self.runner.idle_correction
+        if idle is not None:
+            out["idle_correction_gate"] = self.runner.idle_gate_applied
+            out["idle_correction_ready"] = bool(idle.ready[0])
+            out.update(dict(zip(("idle_est_vx", "idle_est_vy", "idle_est_wz"),
+                                idle.estimated_twist[0].tolist())))
         out.update(dict(zip(("cart_vx_band", "cart_vy_band", "cart_wz_band"), q.velocity_band[0].tolist())))
         out.update(dict(zip(("cart_fx_band", "cart_fy_band", "cart_mz_band"), q.wrench_band[0].tolist())))
         out.update(dict(zip(("cart_response_error_vx", "cart_response_error_vy", "cart_response_error_wz"),

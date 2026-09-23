@@ -1,0 +1,55 @@
+{
+  "schema": "verified_policy_force_export_v1",
+  "simulator": "MuJoCo",
+  "mujoco_version": "3.8.0",
+  "measurement_scope": "continuous trained-checkpoint replay in MuJoCo, not original Isaac/PhysX play recording",
+  "high_level_checkpoint": {
+    "path": "E:\\CJME_Push_car\\logs\\rsl_rl\\homie_pushcart\\2026-09-21_16-56-46_v3_1_speed_quality_scratch\\model_19999.pt",
+    "sha256": "615ac261e117cf1caeac6b8ba0c9b37fae7c8ad2bf7817853e53eacb37870c44",
+    "iteration": 19999
+  },
+  "low_level_checkpoint": {
+    "path": "E:\\CJME_Push_car\\logs\\rsl_rl\\homie_g1\\2026-09-14_15-10-07_my_policy\\model_60000.pt",
+    "sha256": "563125eaa4ff551a8573451e4babcee4359d3162efd31a34e199d1387a38ea36",
+    "iteration": 60000
+  },
+  "model": {
+    "path": "E:\\CJME_Push_car\\assets\\g1_pushcart\\mujoco\\g1_pushcart.xml",
+    "sha256": "29392f5cce8e850a0cbc58a2abe5e4e85717bccfc8745ef8937bd50a1f8e7b98",
+    "physics_dt_s": 0.005,
+    "control_dt_s": 0.02,
+    "integrator": "implicitfast",
+    "nq": 49,
+    "nv": 47,
+    "nu": 27
+  },
+  "scenario": {
+    "name": "push_03",
+    "task_command": [
+      0.3,
+      0.0,
+      0.0
+    ],
+    "payload_kg": 0.0,
+    "caster_angle_rad": 0.0,
+    "curriculum_level": 17,
+    "seed": 0,
+    "automatic_resets": 0
+  },
+  "sampling": {
+    "physics_rate_Hz": 200,
+    "control_rate_Hz": 50,
+    "samples": 6000,
+    "time_start_s": 0.0,
+    "time_end_s": 29.994999999998317
+  },
+  "timing": "pre-integration qpos/qvel/ctrl/time paired with each mj_step; wrench is the solved hand-on-cart Cartesian wrench after that step",
+  "coordinate_conventions": {
+    "world": "right-handed, +Z up",
+    "hand_wrench": "force/moment exerted by hand on cart, about cart grip point",
+    "reaction": "cart on hand is the negative of this six-vector",
+    "order": "[Fx,Fy,Fz,Mx,My,Mz]"
+  },
+  "failures": [],
+  "continuous_run": true
+}

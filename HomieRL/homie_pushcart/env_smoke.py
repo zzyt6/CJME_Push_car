@@ -76,6 +76,8 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
     from .task_env import PushCartEnv, TERMINATION_REASONS
 
     device = args.device
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     headless = bool(getattr(launcher, "_headless", True))
     cfg, task_cfg = make_configs(args.num_envs, not args.no_randomization, args.level, args.episode_s)
     if getattr(args, "quality_profile", None):
@@ -95,11 +97,22 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
         task_cfg.randomization.wheel_stall_prob_per_s = 0.0
     if getattr(args, "no_kick", False):
         task_cfg.randomization.cart_push_vel_max = 0.0
+    if getattr(args, "no_robot_push", False):
+        task_cfg.randomization.robot_push = False
+    if getattr(args, "no_idle_correction", False):
+        task_cfg.idle_correction.enabled = False
     env = PushCartEnv(cfg, task_cfg, root, device, headless, checkpoint=args.checkpoint, cart_params=cart_params,
                       allow_robot_cart_contact=bool(getattr(args, "allow_contact", False)))
     report = json.loads(ASSET_REPORT.read_text(encoding="utf-8"))
+    if getattr(args, "fixed_command", None) is not None:
+        env.fixed_command = list(args.fixed_command)
+    if getattr(args, "payload", None) is not None:
+        if not math.isfinite(args.payload) or args.payload < 0:
+            raise ValueError("payload must be finite and nonnegative")
+        env.fixed_payload_kg = float(args.payload)
 
     obs, critic = env.reset()
+    initial_cart_xy = env.cart_state()[0][:, :2].clone()
     assert obs.shape == (args.num_envs, env.num_hl_obs), obs.shape
     assert critic.shape == (args.num_envs, env.num_hl_critic_obs), critic.shape
     invariants = [reset_invariants(env, report)]
@@ -133,6 +146,10 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
     last_push_prev = env.last_push_step
     start = time.perf_counter()
     quality_costs = []
+    idle_gate_max, idle_active_samples = 0., 0
+    command_mode_counts = [0, 0, 0]
+    sequence_phase_max = 0
+    max_cart_displacement = 0.
     for step in range(args.steps):
         if not launcher.app.is_running():
             raise RuntimeError("Simulation closed before the env smoke completed")
@@ -148,6 +165,21 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
             t = step * env.dt
             actions = torch.full((args.num_envs, env.num_hl_actions), math.sin(2 * math.pi * t / 4.0), device=device)
         obs, critic, rew, done, extras = env.step(actions)
+        if not done.any():
+            max_cart_displacement = max(max_cart_displacement,
+                float((env.cart_state()[0][:, :2] - initial_cart_xy).norm(dim=1).max()))
+        if env.idle_correction is not None:
+            tracker = env.idle_correction
+            for value in (tracker.estimated_twist, tracker.gate_level, env.idle_gate_applied):
+                if not torch.isfinite(value).all():
+                    raise FloatingPointError(f"idle correction has non-finite values at step {step}")
+            idle_gate_max = max(idle_gate_max, float(env.idle_gate_applied.max()))
+            idle_active_samples += int((env.idle_gate_applied > 1e-4).sum())
+            assert idle_gate_max <= task_cfg.idle_correction.max_gate + 1e-6
+        if env.command_schedule is not None:
+            for mode in range(3):
+                command_mode_counts[mode] += int((env.command_schedule.mode == mode).sum())
+            sequence_phase_max = max(sequence_phase_max, int(env.command_schedule.phase.max()))
         for name, tensor in (("obs", obs), ("critic", critic), ("rew", rew)):
             if not torch.isfinite(tensor).all():
                 raise FloatingPointError(f"{name} has non-finite values at step {step}")
@@ -208,12 +240,23 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
     assert done.all() and extras["time_outs"].all(), "timeout should reset every env"
     if env.cart_quality is not None:
         assert not env.cart_quality.initialized.any(), "quality history must reset with each environment"
+    if env.idle_correction is not None:
+        assert not env.idle_correction.ready.any(), "idle estimate must warm up again after reset"
+        assert not env.idle_correction.gate_level.any(), "idle gate must close on reset"
     invariants.append(reset_invariants(env, report))
 
     summary = env.termination_summary()
     result = {
         "result": "PASS" if all(i["pass"] for i in invariants) else "RESET_INVARIANT_FAILED",
         "policy": args.policy, "num_envs": args.num_envs, "steps": args.steps, "level": env.curriculum.level,
+        "v4_motion": {"command_sequence_enabled": env.command_schedule is not None,
+                      "command_mode_sample_counts": dict(zip(("random", "stop_go", "turn_reversal"), command_mode_counts)),
+                      "sequence_phase_max": sequence_phase_max,
+                      "idle_correction_enabled": env.idle_correction is not None,
+                      "idle_gate_max": idle_gate_max, "idle_gate_active_samples": idle_active_samples,
+                      "max_cart_displacement_m": max_cart_displacement if n_resets == 0 else None,
+                      "fixed_command": getattr(args, "fixed_command", None),
+                      "fixed_payload_kg": getattr(args, "payload", None)},
         "randomization": not args.no_randomization,
         "cart_quality": ({**env.cart_quality.metadata(), "profile": getattr(args, "quality_profile", None),
                           "cost_names": ["cart_ripple", "cart_lin_ripple", "cart_yaw_ripple",
@@ -235,7 +278,8 @@ def run_env_smoke(args, launcher, root: Path = ROOT) -> dict:
         "disturbance_events": {"wheel_stalls": n_stalls, "cart_kicks": n_kicks, "robot_push_rounds": n_pushes},
         "diagnostic_knobs": {"allow_contact": bool(getattr(args, "allow_contact", False)), "cart_iters": getattr(args, "cart_iters", None),
                              "legacy_push": bool(getattr(args, "legacy_push", False)), "no_force_clip": bool(getattr(args, "no_force_clip", False)),
-                             "no_stall": bool(getattr(args, "no_stall", False)), "no_kick": bool(getattr(args, "no_kick", False))},
+                             "no_stall": bool(getattr(args, "no_stall", False)), "no_kick": bool(getattr(args, "no_kick", False)),
+                             "no_robot_push": bool(getattr(args, "no_robot_push", False))},
         "reset_invariants_all_pass": all(i["pass"] for i in invariants), "reset_checks": len(invariants),
         "worst_reset": {k: max(i.get(k, 0.0) for i in invariants) for k in ("cart_tilt_max_deg", "wheel_bottom_abs_max_mm", "bar_in_base_std_m", "rel_yaw_abs_max_rad", "grasp_error_max_mm")},
         "realtime_factor": args.steps * env.dt / elapsed,

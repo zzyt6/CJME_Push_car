@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 import json
 from pathlib import Path
+import re
 
 import numpy as np
 
@@ -15,9 +16,26 @@ PATH_COLUMNS = [("success", "成功率", None), ("time_to_goal", "到点时间 s
                 ("cmd_vx_rmse", "vx 跟踪 RMSE", 3), ("cmd_wz_rmse", "wz 跟踪 RMSE", 3), ("grasp_p95", "抓握 p95 N", 0),
                 ("lateral_p95", "侧向力 p95 N", 0), ("overload_frac", "过载占比", 3),
                 ("cmd_clip_frac", "命令残差饱和占比", 2), ("arm_clip_frac", "臂动作饱和占比", 2), ("arm_target_std", "臂修正波动 rad", 3)]
-STEP_COLUMNS = [("rise_time", "上升 s", 2), ("settling_time", "整定 s", 2), ("overshoot", "超调", 2), ("ss_error", "稳态误差", 3),
+STEP_COLUMNS = [("failure", "失败数/运行数", None),
+                ("rise_time", "上升 s", 2), ("reference_rise_time", "参考自身上升 s", 2),
+                ("reference_settling_time", "参考自身整定 s", 2), ("settling_time", "整定 s", 2),
+                ("settling_confirmed", "整定确认率", None), ("overshoot", "超调", 2), ("ss_error", "稳态误差", 3),
                 ("post_rmse", "稳态 RMSE", 3), ("ripple_rms", "纹波 RMS", 3), ("ss_std", "慢振荡 std (0.4 s 滤波)", 3),
-                ("stopping_distance", "停止距离 m", 2), ("drift_distance", "漂移 m", 2), ("grasp_p95", "抓握 p95 N", 0)]
+                ("drift_distance", "漂移 m", 2), ("grasp_p95", "抓握 p95 N", 0)]
+RESPONSE_COLUMNS = [("reference_tracking_transient_rmse", "瞬态实际−参考 RMSE", 3),
+                    ("reference_tracking_full_rmse", "全程实际−参考 RMSE", 3),
+                    ("reference_tracking_full_iae", "全程实际−参考 IAE", 3),
+                    ("reference_tracking_full_coverage", "参考跟踪有效覆盖率", 3),
+                    ("cart_response_error_cost_mean_transient", "瞬态响应成本均值", 3),
+                    ("cart_response_error_cost_integral_transient", "瞬态响应成本积分 s", 3),
+                    ("cart_response_error_cost_integral_full", "全程响应成本积分 s", 3),
+                    ("cart_response_full_coverage", "响应成本有效覆盖率", 3)]
+STOP_COLUMNS = [("stopping_confirmed", "最终停稳确认率", None), ("stopping_distance", "最终确认距离 m", 3),
+                ("stopping_time", "最终确认时间 s", 2), ("first_low_distance", "首次低速距离 m", 3),
+                ("first_stop_confirmed_time", "首次确认时间 s", 2),
+                ("post_first_stop_travel", "首次确认后移动 m", 3),
+                ("post_stop_travel", "最终确认后移动 m", 3), ("stop_rebound_events", "回弹事件数", 0),
+                ("stop_rebound_count", "超阈值样本数", 0), ("stop_invalid_samples", "无效样本数", 0)]
 
 
 QUALITY_COLUMNS = [("cart_vx_band_rms", "vx 带限 RMS m/s", 3), ("cart_wz_band_rms", "wz 带限 RMS rad/s", 3),
@@ -43,11 +61,14 @@ def _group(runs, key):
 
 ALL_RUN_METRICS = {"success", "min_goal_dist", "time_enter", "grasp_p95", "lateral_p95", "overload_frac",
                    "cmd_clip_frac", "arm_clip_frac", "arm_target_std",
-                   "rise_time", "settling_time", "overshoot", "ss_error", "post_rmse", "ripple_rms", "ss_std", "stopping_distance", "drift_distance"}
+                   "rise_time", "reference_rise_time", "reference_settling_time", "settling_time", "overshoot", "ss_error", "cart_response_error_cost_mean_transient", "post_rmse", "ripple_rms", "ss_std",
+                   "stopping_confirmed", "stopping_distance", "stopping_time", "first_low_distance", "post_stop_travel",
+                   "stop_rebound_count", "drift_distance"}
 
 
 ALL_RUN_METRICS.update(column[0] for column in QUALITY_COLUMNS)
 ALL_RUN_METRICS.update(column[0] for column in RECOVERY_COLUMNS)
+ALL_RUN_METRICS.update(column[0] for column in RESPONSE_COLUMNS + STOP_COLUMNS)
 
 
 def _cell(runs, metric, digits):
@@ -56,6 +77,14 @@ def _cell(runs, metric, digits):
     if metric == "success":
         vals = [1.0 if r["metrics"].get("success") else 0.0 for r in runs]
         return f"{100 * np.mean(vals):.0f} % ({int(sum(vals))}/{len(vals)})" if vals else "-"
+    if metric == "failure":
+        return f"{sum(bool(r['metrics'].get('failure')) for r in runs)}/{len(runs)}"
+    if metric in ("stopping_confirmed", "settling_confirmed"):
+        vals = [bool(r["metrics"][metric]) for r in runs if r["metrics"].get(metric) is not None]
+        return f"{100 * np.mean(vals):.0f} % ({sum(vals)}/{len(vals)})" if vals else "-"
+    if metric == "stopping_distance":
+        # A pre-V4 distance means first crossing, not final confirmation; never relabel it.
+        runs = [r for r in runs if "stopping_confirmed" in r["metrics"]]
     if metric not in ALL_RUN_METRICS and runs and runs[0]["kind"] != "step":
         runs = [r for r in runs if r["metrics"].get("success")]
     agg = aggregate([r["metrics"].get(metric) for r in runs])
@@ -99,8 +128,13 @@ def _plt():
 
 
 def _short(name: str) -> str:
-    """two_stage:<run dir>/model_N -> two_stage/model_N for legends."""
-    return name.split("/")[-1].join(["two_stage/", ""]) if name.startswith("two_stage:") and "/" in name else name
+    """Keep the run identity: different versions often share the same model_N filename."""
+    if name.startswith("two_stage:") and "/" in name:
+        run, checkpoint = name.split(":", 1)[1].rsplit("/", 1)
+        run = run.rsplit("/", 1)[-1]
+        run = re.sub(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_", "", run)
+        return f"{run}/{checkpoint}"
+    return name
 
 
 def _fig_paths(runs, out_dir: Path) -> list[str]:
@@ -147,6 +181,9 @@ def _fig_steps(runs, out_dir: Path) -> list[str]:
                 ax.plot(tr["t"], tr[sig], lw=1.4, label=_short(r["policy"]["name"]))
                 cmd = np.asarray(tr["cmd"])
                 ax.plot(tr["t"], cmd[:, {"vx": 0, "vy": 1, "wz": 2}[sig]], "k--", lw=0.9)
+                ref = tr.get(f"cart_ref_{sig}")
+                if ref is not None:
+                    ax.plot(tr["t"], ref, ":", lw=1.0, label=f"{_short(r['policy']['name'])} 参考")
             ax.set_title(f"{sname} · {payload:g} kg"); ax.grid(alpha=0.3); ax.set_xlabel("t [s]"); ax.set_ylabel(r["metrics"]["signal"])
             ax.legend(fontsize=8)
         name = f"step_{sname}.png"
@@ -217,8 +254,28 @@ def write_report(out_dir: Path) -> Path:
                       _table(runs, lambda r: r["path"] + (f" {r['gains']}" if r.get("gains") else ""), "轨迹", PATH_COLUMNS), ""]
             figures = _fig_paths(runs, out_dir)
         elif kind == "step":
+            if meta.get("recomputation"):
+                rec = meta["recomputation"]
+                lines += [f"重算来源：`{rec['source']}`；{rec.get('note', '')}", ""]
+            if any("settling_confirmed" not in r["metrics"] for r in runs):
+                lines += ["注意：部分运行使用旧指标，缺少持续整定/停稳确认字段；重新生成报告不会自动重算原始指标。", ""]
             lines += ["## 实验 2：速度阶跃响应（策略 × 阶跃 × 载荷）", "",
+                      "上升/整定/超调相对原始命令计算；参考自身上升/整定只描述任务参考曲线，不能直接解释为控制器延迟。"
+                      "整定必须在最后的连续入带区间满足保持时长。未确认的时间为缺失，均值只包含已确认运行，须结合确认率阅读。", "",
                       _table(runs, lambda r: f"{r['step']['name']} @ {r['condition']['payload_kg']:g} kg", "阶跃 @ 载荷", STEP_COLUMNS), ""]
+            if any("reference_tracking_full_rmse" in r["metrics"] for r in runs):
+                lines += ["## 实际车速对动态参考的跟踪", "",
+                          "全程指命令切换后到测试结束，瞬态时长取 defaults.transient_s；原始跟踪误差未经包络平滑。"
+                          "RMSE 单位同被测速度，IAE 为绝对误差对时间积分；响应成本是训练用短时滤波误差的无量纲成本。"
+                          "积分不跨无效样本或采样缺口，覆盖率不足时不能将较小积分直接当成改善。", "",
+                          _table(runs, lambda r: f"{r['step']['name']} @ {r['condition']['payload_kg']:g} kg", "阶跃 @ 载荷", RESPONSE_COLUMNS), ""]
+            stops = [r for r in runs if r.get("step", {}).get("stopping")]
+            if stops:
+                lines += ["## 停车与回弹", "",
+                          "最终停稳要求记录末尾连续低于阈值并达到 stop_dwell_s；中间短暂停住后再次运动不会算作最终停稳。"
+                          "首次低速、首次确认与最终确认分别记录。回弹事件数统计首次低速后重新超阈值的连续段；样本数随采样率改变。"
+                          "无效位姿跨越的距离无法确认，显示缺失。旧报告的首次低速距离不会自动改名为最终停止距离。", "",
+                          _table(stops, lambda r: f"{r['step']['name']} @ {r['condition']['payload_kg']:g} kg", "停车 @ 载荷", STOP_COLUMNS), ""]
             figures = _fig_steps(runs, out_dir)
         elif kind == "robust":
             lines += ["## 实验 3：鲁棒性扫描（单因子，其余取默认）", ""]
