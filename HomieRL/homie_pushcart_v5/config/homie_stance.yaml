@@ -1,0 +1,107 @@
+checkpoint: E:\CJME_Push_car\logs\rsl_rl\homie_g1\2026-09-14_15-10-07_my_policy\model_60000.pt
+iteration: 60000
+num_envs: 8
+settle_s: 3.0
+average_s: 3.0
+root_height_mean: 0.7592139840126038
+root_height_std: 0.001429354422725737
+pelvis_pitch_mean: 0.0190158449113369
+pelvis_pitch_std: 0.0036884602159261703
+projected_gravity_mean:
+- 0.019009999930858612
+- -0.0013099999632686377
+- -0.9996299743652344
+feet_link_z_stance: 0.03527051955461502
+feet_link_z_mean: 0.03852476924657822
+feet_link_z_std: 0.005068683996796608
+leg_joint_mean:
+  left_hip_pitch_joint: -0.36999017000198364
+  left_hip_roll_joint: 0.014463397674262524
+  left_hip_yaw_joint: -0.016451241448521614
+  left_knee_joint: 0.6678375601768494
+  left_ankle_pitch_joint: -0.3197396993637085
+  left_ankle_roll_joint: -0.01655850186944008
+  right_hip_pitch_joint: -0.3684314787387848
+  right_hip_roll_joint: -0.011069029569625854
+  right_hip_yaw_joint: 0.02054857276380062
+  right_knee_joint: 0.6743259429931641
+  right_ankle_pitch_joint: -0.32590311765670776
+  right_ankle_roll_joint: 0.01715811714529991
+leg_joint_std:
+  left_hip_pitch_joint: 0.023188821971416473
+  left_hip_roll_joint: 0.012118487618863583
+  left_hip_yaw_joint: 0.016436588019132614
+  left_knee_joint: 0.036960750818252563
+  left_ankle_pitch_joint: 0.03517279773950577
+  left_ankle_roll_joint: 0.008882132358849049
+  right_hip_pitch_joint: 0.02170669659972191
+  right_hip_roll_joint: 0.012128481641411781
+  right_hip_yaw_joint: 0.016900284215807915
+  right_knee_joint: 0.03319471701979637
+  right_ankle_pitch_joint: 0.033835094422101974
+  right_ankle_roll_joint: 0.007217352278530598
+upper_joint_mean:
+  waist_yaw_joint: -0.00020932855841238052
+  left_shoulder_pitch_joint: -0.646931529045105
+  left_shoulder_roll_joint: 0.39512792229652405
+  left_shoulder_yaw_joint: -1.0103589296340942
+  left_elbow_joint: -0.27634894847869873
+  left_wrist_roll_joint: 1.168014407157898
+  left_wrist_pitch_joint: 1.2997777462005615
+  left_wrist_yaw_joint: -0.49790284037590027
+  right_shoulder_pitch_joint: -0.6467593312263489
+  right_shoulder_roll_joint: -0.3954334259033203
+  right_shoulder_yaw_joint: 1.010254144668579
+  right_elbow_joint: -0.27616357803344727
+  right_wrist_roll_joint: -1.1680694818496704
+  right_wrist_pitch_joint: 1.3003891706466675
+  right_wrist_yaw_joint: 0.49788692593574524
+upper_joint_std:
+  waist_yaw_joint: 0.010836293920874596
+  left_shoulder_pitch_joint: 0.004374252632260323
+  left_shoulder_roll_joint: 0.0071526807732880116
+  left_shoulder_yaw_joint: 0.0024390602484345436
+  left_elbow_joint: 0.00453655980527401
+  left_wrist_roll_joint: 0.005048131570219994
+  left_wrist_pitch_joint: 0.018064653500914574
+  left_wrist_yaw_joint: 0.0034395819529891014
+  right_shoulder_pitch_joint: 0.004005915950983763
+  right_shoulder_roll_joint: 0.006877322681248188
+  right_shoulder_yaw_joint: 0.0023129284381866455
+  right_elbow_joint: 0.004384002182632685
+  right_wrist_roll_joint: 0.005170886870473623
+  right_wrist_pitch_joint: 0.017801590263843536
+  right_wrist_yaw_joint: 0.003422137815505266
+upper_sag_rad:
+  waist_yaw_joint: 0.00011732855637092143
+  left_shoulder_pitch_joint: -0.02767843008041382
+  left_shoulder_roll_joint: 0.0029110610485076904
+  left_shoulder_yaw_joint: 0.009923934936523438
+  left_elbow_joint: -0.019879043102264404
+  left_wrist_roll_joint: 0.05383455753326416
+  left_wrist_pitch_joint: -0.004887700080871582
+  left_wrist_yaw_joint: 0.03438183665275574
+  right_shoulder_pitch_joint: -0.02777963876724243
+  right_shoulder_roll_joint: -0.0025705695152282715
+  right_shoulder_yaw_joint: -0.00973522663116455
+  right_elbow_joint: -0.01982441544532776
+  right_wrist_roll_joint: -0.053740501403808594
+  right_wrist_pitch_joint: -0.005292057991027832
+  right_wrist_yaw_joint: -0.03439792990684509
+upper_hold_offset_before:
+  waist_yaw_joint: -9.200000204145908e-05
+  left_shoulder_pitch_joint: -0.027765000239014626
+  left_shoulder_roll_joint: 0.0027550000231713057
+  left_shoulder_yaw_joint: 0.009868999943137169
+  left_elbow_joint: -0.019972000271081924
+  left_wrist_roll_joint: 0.053766001015901566
+  left_wrist_pitch_joint: -0.00520299980416894
+  left_wrist_yaw_joint: 0.034341998398303986
+  right_shoulder_pitch_joint: -0.02769399993121624
+  right_shoulder_roll_joint: -0.0027199999894946814
+  right_shoulder_yaw_joint: -0.0097850002348423
+  right_elbow_joint: -0.019732000306248665
+  right_wrist_roll_joint: -0.05372700095176697
+  right_wrist_pitch_joint: -0.0049959998577833176
+  right_wrist_yaw_joint: -0.03437399864196777
+preset_root_height_before: 0.759161

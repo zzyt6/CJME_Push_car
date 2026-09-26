@@ -120,10 +120,13 @@ class HomieTaskCore:
             adds each terms to the episode sums and to the total reward
         """
         self.rew_buf[:] = 0.
+        finite_interval = max(0, int(self.__dict__.get("_finite_check_interval_steps", 1)))
+        check_finite = (finite_interval > 0 and
+                        self.common_step_counter % finite_interval == 0)
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             rew = self.reward_functions[i]() * self.reward_scales[name]
-            if not torch.isfinite(rew).all():
+            if check_finite and not torch.isfinite(rew).all():
                 raise FloatingPointError(f"Non-finite reward: {name}")
             self.rew_buf += rew
             self.episode_sums[name] += rew

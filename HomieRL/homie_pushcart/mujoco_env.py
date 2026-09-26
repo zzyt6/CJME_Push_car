@@ -30,10 +30,10 @@ def quat_rotate_inverse_wxyz(q: np.ndarray, v: np.ndarray) -> np.ndarray:
 
 
 class MujocoHomieEnv:
-    def __init__(self, with_cart: bool, xml_path: Path | None = None, decimation: int = 4):
+    def __init__(self, with_cart: bool, xml_path: Path | None = None, decimation: int = 4, *, cfg=None):
         from homie_isaaclab.config import G1RoughCfg
 
-        self.cfg = G1RoughCfg()
+        self.cfg = G1RoughCfg() if cfg is None else cfg
         self.with_cart = with_cart
         self.xml_path = Path(xml_path) if xml_path else (MJCF_SCENE if with_cart else MJCF_ROBOT)
         if not self.xml_path.is_file():
