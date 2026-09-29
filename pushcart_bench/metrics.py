@@ -15,6 +15,9 @@ CART_QUALITY_SIGNALS = (
     "quality_ready", "cart_ripple_cost", "cart_wrench_osc_cost",
     "cart_lin_ripple_cost", "cart_yaw_ripple_cost", "cart_response_ready", "cart_response_error_cost",
     "cart_response_error_vx", "cart_response_error_vy", "cart_response_error_wz",
+    "cart_est_vx", "cart_est_vy", "cart_est_wz",
+    "est_left_fx", "est_left_fy", "est_left_fz", "est_left_mx", "est_left_my", "est_left_mz",
+    "est_right_fx", "est_right_fy", "est_right_fz", "est_right_mx", "est_right_my", "est_right_mz",
 )
 
 

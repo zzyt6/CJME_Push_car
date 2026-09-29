@@ -1,5 +1,7 @@
 > 本机 Windows / RLisaac601 / Isaac Sim 6.0.1 / Isaac Lab 3 运行入口已适配：请先阅读 [本机运行说明](README_RLisaac601.md) 和 [官方迁移教程核对记录](docs/isaac_migration.md)。下方原安装流程针对 Ubuntu + Isaac Gym Preview 4。
 
+推车当前升级入口为 [V6：V3.2 基线与双估计器](docs/push_cart_v6.md)。V6 测评固定 legacy 四球足底物理；V3/V5 入口与结果保留为历史对照。
+
 <br>
 <p align="center">
 <h1 align="center"><strong>HOMIE: Humanoid Loco-Manipulation with Isomorphic Exoskeleton Cockpit (RL)</strong></h1>

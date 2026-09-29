@@ -3,7 +3,7 @@
 The Isaac-side V5.x actor observation (fixed-grasp FK, HIM velocity paired with the post-step sample,
 observable recovery authority, and for V5.2 the (J^T)^+ tau prior) is rebuilt here from MuJoCo measurements,
 mirroring ``PushCartEnv.step`` / ``_update_hl_observations`` with all observation noise and delays off.
-The default ``isaac`` scene uses the training URDF inertias, joint limits,
+The default ``isaac`` scene uses the historical training-URDF inertias, joint limits,
 mixed actuator interface and compact payload model, restoring the saved HOMIE
 settings and checkpoint. ``upper_drive='explicit_pd'`` selects the separate
 all-effort experiment. ``scene_profile='legacy'`` reproduces the original
@@ -50,16 +50,24 @@ class InstrumentedEnv(MujocoHomieEnv):
     """Selectable scene/actuation profile with read-only grasp-wrench instrumentation."""
 
     def __init__(self, with_cart: bool, xml_path: Path | None = None, decimation: int = 4,
-                 scene_profile: str = "legacy", *, cfg=None, upper_drive: str = "training"):
+                 scene_profile: str = "legacy", *, cfg=None, upper_drive: str = "training",
+                 inertia_profile: str = "urdf", scene_version: str = "original"):
         if scene_profile not in ("legacy", "isaac"):
             raise ValueError(f"Unknown sim2sim scene profile: {scene_profile}")
         self.scene_profile = scene_profile
+        from .sim2sim_scene import normalize_scene_version
+        self.scene_version = normalize_scene_version(scene_version)
+        if scene_profile == "legacy" and self.scene_version != "original":
+            raise ValueError("Selectable foot contacts require the isaac parameter scene profile")
+        if inertia_profile not in ('urdf', 'physx') or (scene_profile == 'legacy' and inertia_profile != 'urdf'):
+            raise ValueError('PhysX inertia compatibility requires the aligned scene')
+        self.inertia_profile = inertia_profile
         self.upper_drive = validate_upper_drive(upper_drive)
         if scene_profile == "isaac":
             if not with_cart or xml_path is not None:
                 raise ValueError("The Isaac parameter profile owns its robot+cart scene")
             from .sim2sim_scene import build_isaac_scene
-            xml_path = build_isaac_scene(cfg, self.upper_drive)
+            xml_path = build_isaac_scene(cfg, self.upper_drive, inertia_profile, self.scene_version)
         super().__init__(with_cart, xml_path, decimation, cfg=cfg)
         m = self.model
         self.robot_mass = float(m.body_subtreemass[self.pelvis_id])
@@ -189,7 +197,9 @@ class V5xRunner:
     """MuJoCo counterpart of the V5.1 / V5.2 ``PushCartEnv`` action and observation pipeline (single env)."""
 
     def __init__(self, package: str, checkpoint: Path, level: int = 17, homie_checkpoint: Path | None = None,
-                 scene_profile: str = "isaac", upper_drive: str | None = None):
+                 scene_profile: str = "isaac", upper_drive: str | None = None,
+                 grasp_profile: str | None = None, inertia_profile: str | None = None,
+                 scene_version: str = "original"):
         mod = lambda name: importlib.import_module(f"{package}.{name}")  # noqa: E731
         tcm, obm, fgm, cqm, cum, low = (mod(n) for n in ("task_config", "observation", "fixed_grasp",
                                                            "cart_quality", "curriculum", "lowlevel"))
@@ -197,10 +207,18 @@ class V5xRunner:
         cfg, tc = mod("env_smoke").make_configs(1, False, level, checkpoint=checkpoint)
         self.task_cfg = tc
         mode = upper_drive if upper_drive is not None else getattr(tc.actions, "upper_drive", "training")
+        # Proposed corrections remain explicit experiments while the grasp
+        # mapping is reviewed. Do not silently promote better-scoring settings.
+        effective_inertia = inertia_profile or "urdf"
         self.env = env = InstrumentedEnv(with_cart=True, scene_profile=scene_profile,
-                                         cfg=cfg if scene_profile == "isaac" else None,
+                                         cfg=cfg if scene_profile == "isaac" else None, inertia_profile=effective_inertia,
                                          decimation=cfg.control.decimation if scene_profile == "isaac" else 4,
-                                         upper_drive=mode)
+                                         upper_drive=mode, scene_version=scene_version)
+        # Retain the original grasp until the cross-engine joint representation
+        # and frames are independently established; rigid_limit is opt-in only.
+        from .sim2sim_scene import set_grasp_profile
+        effective_grasp = grasp_profile or "nominal"
+        set_grasp_profile(env, effective_grasp)
         saved_lowlevel = getattr(cfg, "pushcart_saved_checkpoint", None)
         self.homie_checkpoint = Path(homie_checkpoint or saved_lowlevel or low.frozen_checkpoint())
         if not self.homie_checkpoint.is_absolute():
@@ -438,14 +456,20 @@ class V5xPolicy(CartPolicyBase):
     """Bench policy for a V5.1 / V5.2 checkpoint (``package`` = homie_pushcart_v51 | homie_pushcart_v52)."""
 
     def __init__(self, package: str, checkpoint: str | Path, level: int = 17, homie_checkpoint: Path | None = None,
-                 name: str | None = None, scene_profile: str = "isaac", upper_drive: str | None = None):
-        self.runner = V5xRunner(package, Path(checkpoint), level, homie_checkpoint, scene_profile, upper_drive)
+                 name: str | None = None, scene_profile: str = "isaac", upper_drive: str | None = None,
+                 grasp_profile: str | None = None, inertia_profile: str | None = None):
+        self.runner = V5xRunner(package, Path(checkpoint), level, homie_checkpoint, scene_profile, upper_drive, grasp_profile, inertia_profile)
+        self._initialize_runner(self.runner, checkpoint, level, name)
+
+    def _initialize_runner(self, runner, checkpoint, level, name=None):
+        """Common bench state, also used by the distinct V5.3 observation pipeline."""
+        self.runner = runner
         self.homie_checkpoint = self.runner.homie_checkpoint
         self.env = self.runner.env
         self.dt = self.env.dt
         self.level = level
         self.hl_checkpoint = Path(checkpoint)
-        self.name = name or f"{package}:{self.hl_checkpoint.parent.name}/{self.hl_checkpoint.stem}"
+        self.name = name or f"{self.runner.package}:{self.hl_checkpoint.parent.name}/{self.hl_checkpoint.stem}"
         m = self.env.model
         self.cart_body = self.runner.cart_body
         self.cart_qvel = int(m.joint("cart_free").dofadr[0])

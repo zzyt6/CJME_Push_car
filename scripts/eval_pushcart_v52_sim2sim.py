@@ -1,6 +1,8 @@
 """Frozen-checkpoint force-estimator evaluation in legacy/aligned MuJoCo or Isaac.
 
-No training, force-based calibration, or estimator-dependent scene tuning.
+No training or estimator-dependent scene tuning. The default retains the original
+nominal grasp and URDF inertia. Proposed corrections are explicit experiments,
+pending joint-mapping review. Labels still come from actual cart interactions.
 Example: python scripts/eval_pushcart_v52_sim2sim.py --engine mujoco --steps 500
 Isaac: add --engine isaac --viz none (run separately, with the same conditions).
 """
@@ -58,7 +60,9 @@ def mujoco_run(args):
     from pushcart_bench.sim2sim_scene import model_report
     torch.set_num_threads(1)
     for profile in args.profiles:
-        policy = V5xPolicy("homie_pushcart_v52", args.checkpoint, scene_profile=profile, upper_drive=args.upper_drive)
+        policy = V5xPolicy("homie_pushcart_v52", args.checkpoint, scene_profile=profile, upper_drive=args.upper_drive,
+                          grasp_profile=getattr(args, 'grasp_profile', None),
+                          inertia_profile=getattr(args, 'inertia_profile', None))
         if args.estimator:
             from homie_pushcart_v52.transfer_estimator import install_estimator
             install_estimator(policy.runner.actor, args.estimator)
@@ -114,6 +118,10 @@ def mujoco_run(args):
                 rmse=np.sqrt((difference**2).mean(0)).tolist(), max_abs=np.max(abs(difference), axis=0).tolist(),
                 note="Independent arm RNE balance at the same solver sample; moment differences include soft-weld anchor separation.")
         name = profile if policy.env.upper_drive == "training" else f"{profile}_{policy.env.upper_drive}"
+        if policy.env.grasp_profile != 'nominal':
+            name += '_' + policy.env.grasp_profile
+        if policy.env.inertia_profile != 'urdf':
+            name += '_' + policy.env.inertia_profile + '_inertia'
         write(args, name, report)
         if args.capture:
             save_capture(args, name, captures, report)
@@ -234,6 +242,10 @@ def main():
     parser.add_argument("--estimator", type=Path, help="attach a trained standalone force estimator to the actual actor")
     parser.add_argument("--capture", action="store_true", help="save held-out raw estimator samples for same-trajectory comparison")
     parser.add_argument("--profiles", nargs="+", choices=("legacy", "isaac"), default=["legacy", "isaac"])
+    parser.add_argument("--grasp_profile", choices=("nominal", "rigid_limit"), default=None,
+                        help="default: nominal; rigid_limit is an explicit grasp-impedance experiment")
+    parser.add_argument("--inertia_profile", choices=("urdf", "physx"), default=None,
+                        help="default: urdf; physx is an explicit runtime-inertia compatibility experiment")
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--payloads", type=float, nargs="+", default=[0., 12.5, 25.])
     parser.add_argument("--commands", nargs="+", choices=tuple(COMMANDS), default=list(COMMANDS))
@@ -242,6 +254,10 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", type=Path, default=ROOT / "logs/bench/v52_sim2sim_alignment")
     preliminary, _ = parser.parse_known_args()
+    if preliminary.inertia_profile == 'physx' and (preliminary.engine != 'mujoco' or preliminary.profiles != ['isaac']):
+        parser.error('Use --engine mujoco --profiles isaac for PhysX inertia compatibility')
+    if preliminary.grasp_profile == 'rigid_limit' and (preliminary.engine != 'mujoco' or preliminary.profiles != ['isaac']):
+        parser.error('Use --engine mujoco --profiles isaac for the rigid_limit grasp diagnostic')
     if preliminary.engine == "mujoco" and preliminary.upper_drive == "explicit_pd" and "legacy" in preliminary.profiles:
         parser.error("Use --profiles isaac with --upper_drive explicit_pd; legacy is the frozen historical scene")
     if preliminary.engine == "isaac":

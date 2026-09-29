@@ -12,7 +12,7 @@ from scipy.spatial.transform import Rotation
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "HomieRL")]
 from pushcart_bench.policies_v5x import InstrumentedEnv
-from pushcart_bench.sim2sim_scene import payload_properties, set_payload
+from pushcart_bench.sim2sim_scene import payload_properties, set_payload, set_grasp_profile
 from homie_pushcart_v52.paths import G1_GRASP_URDF, HOMIE_JOINTS
 
 
@@ -108,6 +108,46 @@ class AlignedSceneTests(unittest.TestCase):
         self.assertAlmostEqual(e.model.body_subtreemass[b], 14.4)
         with self.assertRaises(ValueError):
             set_payload(e, -1.)
+
+
+class TrainingPhysicsCompatibility(unittest.TestCase):
+    def test_grasp_profile_only_changes_two_impedances_and_is_reversible(self):
+        e = InstrumentedEnv(True, scene_profile='isaac')
+        baseline = e.model.eq_solimp.copy()
+        solref = e.model.eq_solref.copy()
+        gain = e.model.actuator_gainprm.copy()
+        set_grasp_profile(e, 'rigid_limit')
+        expected = baseline.copy()
+        for side in ('left', 'right'):
+            expected[e.model.eq('grasp_'+side).id, :2] = .9999
+        np.testing.assert_array_equal(e.model.eq_solimp, expected)
+        np.testing.assert_array_equal(e.model.eq_solref, solref)
+        np.testing.assert_array_equal(e.model.actuator_gainprm, gain)
+        set_grasp_profile(e, 'nominal')
+        np.testing.assert_array_equal(e.model.eq_solimp, baseline)
+
+    def test_compiled_inertia_matches_independent_physx_runtime_samples(self):
+        # Captured from actual get_inertias, not produced by this implementation.
+        # The knee catches USD-vs-URDF orientation, the cart catches reset order,
+        # and the wheel catches replacement of ALL cart-body principal axes.
+        e = InstrumentedEnv(True, scene_profile='isaac', inertia_profile='physx')
+        set_payload(e, 25., (-.008024260401725769, -.08837612718343735))
+        reference = {
+            'left_knee_link': [[.0113797225, -.0000240613, -.0000346126],
+                              [-.0000240613, .0063777338, -.0049067745],
+                              [-.0000346126, -.0049067745, .0063653397]],
+            'cart_base': np.diag([.9857185483, 1.8762832880, 1.7772312164]),
+            'wheel_0': np.diag([.00039, .00039, .00072]),
+        }
+        for name, expected in reference.items():
+            body = e.model.body(name)
+            r = Rotation.from_quat(np.roll(body.iquat, -1)).as_matrix()
+            np.testing.assert_allclose(r @ np.diag(body.inertia) @ r.T, expected, atol=2e-6, rtol=0)
+        set_payload(e, 0.)
+        b = e.model.body('cart_base')
+        r = Rotation.from_quat(np.roll(b.iquat, -1)).as_matrix()
+        np.testing.assert_allclose(r @ np.diag(b.inertia) @ r.T,
+                                   np.diag([.6516, 1.2916005, 1.3600005]), atol=2e-6)
 
 
 class CheckpointSensorCompatibility(unittest.TestCase):

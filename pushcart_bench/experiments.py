@@ -43,7 +43,8 @@ def _policies(args, cfg):
     out = []
     for spec in args.policies:
         t0 = time.perf_counter()
-        policy = make_policy(spec, level=level, homie_checkpoint=homie)
+        policy = make_policy(spec, level=level, homie_checkpoint=homie,
+                             scene_version=getattr(args, "scene_version", "original"))
         print(f"[bench] policy {policy.name}: {policy.describe()} ({time.perf_counter() - t0:.1f} s)", flush=True)
         out.append(policy)
     return out
@@ -60,8 +61,9 @@ def _meta(args, cfg, kind, follower_cfg=None):
     return {"kind": kind, "created": datetime.now().isoformat(timespec="seconds"), "policies": list(args.policies),
             "follower": follower_cfg.to_dict() if follower_cfg else None, "defaults": cfg["defaults"],
             "overload_thresholds": cfg.get("overload_thresholds"),
-            "fairness": "same follower gains / limits, same MuJoCo model and HOMIE checkpoint, same initial pose and seeds, "
-                        "two-stage policy uses the deterministic mean action; cart policies are tracked at the cart base, "
+            "fairness": "shared follower gains / limits and condition settings; per-policy checkpoint and simulator "
+                        "configuration are recorded separately. Different scene versions are explicit scene comparisons. "
+                        "Policies use deterministic actions; cart policies are tracked at the cart base, "
                         "robot_only at the pelvis (same path geometry, each aligned to its own start pose)"}
 
 
@@ -135,7 +137,9 @@ def _exp_path_live(args, cfg, policies, viewer, store, follower_cfg, out_dir, pa
     seed = int(seeds[0]) if seeds else 0
     viewer.setup_live(path_names=names, policy_names=[p.name for p in policies], payload=float(payload),
                       v_nom=follower_cfg.v_nom, cruise=True, follower_defaults=cfg["follower"])
-    if "s_large" in names:
+    if getattr(args, "initial_path", None) in names:
+        viewer.dd_path.value = args.initial_path
+    elif "s_large" in names:
         viewer.dd_path.value = "s_large"
     print(f"[bench] live view -> {out_dir}", flush=True)
     print("[bench] viser: 待命中。调好镜头、开录后点「开始」。改路径/策略/载荷会重新摆位。Ctrl+C 退出。", flush=True)

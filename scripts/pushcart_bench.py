@@ -20,8 +20,10 @@ for p in (ROOT, ROOT / "HomieRL", ROOT / "HomieRL" / "rsl_rl"):
 
 
 def _common(sp):
-    sp.add_argument("--policies", nargs="+", default=["passthrough", "two_stage:latest"],
-                    help="passthrough | robot_only | two_stage[:ckpt|latest] | plugin:module:Class")
+    sp.add_argument("--policies", nargs="+", default=["v6:latest"],
+                    help="v6[:ckpt|latest] (fixed legacy four-sphere plant); archived: passthrough | robot_only | two_stage | v53 | plugin:module:Class")
+    sp.add_argument("--scene_version", choices=("original", "four_spheres", "new"), default="original",
+                    help="scene for v53; v53_original/v53_new specs explicitly select their scene")
     sp.add_argument("--level", type=int, help="curriculum level of the two-stage policy (correction scale); default from yaml")
     sp.add_argument("--homie_checkpoint", type=Path, help="HOMIE model_*.pt (default: the frozen model_60000)")
     sp.add_argument("--config", type=Path, help="benchmark.yaml (default: pushcart_bench/config/benchmark.yaml)")
@@ -70,6 +72,8 @@ def main(argv=None) -> int:
         return 0
     from pushcart_bench.config_io import load_config
     from pushcart_bench import experiments
+    import torch
+    torch.set_num_threads(1)
     cfg = load_config(args.config)
     if args.trace_stride is not None:
         if args.trace_stride < 1:

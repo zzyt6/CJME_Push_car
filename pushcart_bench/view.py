@@ -17,7 +17,8 @@ class BenchViewer:
         self.renderer, self._model_id = None, None
         self.render_hz = render_hz
         self.trail = deque(maxlen=8000)
-        self.hist = {k: deque(maxlen=500) for k in ("t", "cmd_vx", "vx", "cmd_wz", "wz", "ct", "fl", "fr")}
+        self.hist = {k: deque(maxlen=500) for k in ("t", "cmd_vx", "vx", "cmd_vy", "vy", "cmd_wz", "wz",
+                                                   "est_vx", "est_vy", "est_wz", "ct", "fl", "fr")}
         gui = self.server.gui
         self.title = gui.add_markdown("### 推车控制对比实验")
         self.status = gui.add_markdown("")
@@ -34,6 +35,7 @@ class BenchViewer:
             self.speed = gui.add_slider("播放倍率 (1 = 实时, 0 = 不限速)", 0.0, 4.0, 0.1, speed)
         with gui.add_folder("曲线 (最近 10 s)"):
             self.plot_v = gui.add_plotly(self._figure("vx", []), aspect=2.2)
+            self.plot_y = gui.add_plotly(self._figure("vy", []), aspect=2.2)
             self.plot_w = gui.add_plotly(self._figure("wz", []), aspect=2.2)
             self.plot_e = gui.add_plotly(self._figure("横向误差 / 抓握力", []), aspect=2.2)
         with gui.add_folder("已完成的运行", expand_by_default=False):
@@ -128,10 +130,16 @@ class BenchViewer:
     def begin_run(self, path, policy, label: str):
         model = policy.env.model
         if self.renderer is None or self._model_id != id(model):
+            if self.renderer is not None:
+                for handle in list(self.renderer.handles.values()) + list(self.renderer.collision_handles.values()):
+                    handle.remove()
             self.renderer = self._Renderer(self.server, model)
             self._model_id = id(model)
         self.renderer.update(policy.env.data)
         self.trail.clear()
+        if self._trail_handle is not None:
+            self._trail_handle.remove()
+            self._trail_handle = None
         for h in self.hist.values():
             h.clear()
         self._steps = 0
@@ -158,15 +166,25 @@ class BenchViewer:
         tel = trace.telemetry[-1] if trace.telemetry else {}
         h = self.hist
         h["t"].append(trace.t[-1]); h["cmd_vx"].append(cmd[0]); h["vx"].append(vel[0]); h["cmd_wz"].append(cmd[2]); h["wz"].append(vel[2])
+        h["cmd_vy"].append(cmd[1]); h["vy"].append(vel[1])
+        for axis in ("vx", "vy", "wz"):
+            h["est_" + axis].append(tel.get("cart_est_" + axis, float("nan")))
         h["ct"].append(follower.state.cross_track if follower is not None else 0.0)
         h["fl"].append(tel.get("grasp_left", float("nan"))); h["fr"].append(tel.get("grasp_right", float("nan")))
         every = max(1, int(round((1 / policy.dt) / self.render_hz)))
         if self._steps % every == 0:
             self.renderer.update(policy.env.data)
-            self.trail.append((x, y, 0.03))
-            if len(self.trail) >= 2:
-                self._trail_handle = self.server.scene.add_spline_catmull_rom("/bench/trail", np.asarray(self.trail)[-1500:],
-                                                                             color=(40, 200, 90), line_width=2.5)
+            point = np.array([x, y, 0.03])
+            # Repeated near-identical positions can produce degenerate browser
+            # spline geometry while the robot is stationary. This affects only
+            # the displayed trail, never recorded poses or benchmark metrics.
+            new_point = not self.trail or np.linalg.norm(point - self.trail[-1]) >= 1e-4
+            if new_point:
+                self.trail.append(tuple(point))
+            if new_point and len(self.trail) >= 2:
+                self._trail_handle = self.server.scene.add_point_cloud(
+                    "/bench/trail", np.asarray(self.trail, dtype=np.float32)[-1500:],
+                    colors=(40, 200, 90), point_size=.018)
             if follower is not None and self._la_handle is not None:
                 lx, ly = follower.state.lookahead_xy
                 self._la_handle.position = (lx, ly, 0.06)
@@ -195,6 +213,10 @@ class BenchViewer:
             st = follower.state
             lines.append(f"- 进度 {st.s:.2f} / {follower.path.length:.2f} m · 横向误差 {st.cross_track:+.3f} m · 航向误差 {math.degrees(st.heading_err):+.1f}° · 距目标 {st.dist_goal:.2f} m"
                          + (" · **已到达**" if st.reached else ""))
+        if "cart_est_vx" in tel:
+            horizon = float(tel.get("cart_est_horizon_s", 0.))
+            estimate_label = f"下一步车速预测 (+{horizon*1000:.0f} ms)" if horizon else "学习式车速估计"
+            lines.append(f"- {estimate_label} vx {tel['cart_est_vx']:+.2f} vy {tel['cart_est_vy']:+.2f} wz {tel['cart_est_wz']:+.2f}")
         if "grasp_left" in tel:
             lines.append(f"- 抓握力 左 {tel['grasp_left']:.0f} / 右 {tel['grasp_right']:.0f} N · 推 {tel['push_left']:+.0f}/{tel['push_right']:+.0f} · "
                          f"侧 {tel['lat_left']:+.0f}/{tel['lat_right']:+.0f} · 竖 {tel['up_left']:+.0f}/{tel['up_right']:+.0f} N")
@@ -210,8 +232,13 @@ class BenchViewer:
         h = self.hist
         t = list(h["t"])
         if len(t) > 2:
-            self.plot_v.figure = self._figure("vx [m/s]: 命令 / 实际", [("命令", t, h["cmd_vx"], "dash"), ("实际", t, h["vx"], "solid")])
-            self.plot_w.figure = self._figure("wz [rad/s]: 命令 / 实际", [("命令", t, h["cmd_wz"], "dash"), ("实际", t, h["wz"], "solid")])
+            for axis, plot, unit in (("vx", self.plot_v, "m/s"), ("vy", self.plot_y, "m/s"), ("wz", self.plot_w, "rad/s")):
+                traces = [("命令", t, h["cmd_" + axis], "dash"), ("实际", t, h[axis], "solid")]
+                if np.isfinite(list(h["est_" + axis])).any():
+                    horizon = float(tel.get("cart_est_horizon_s", 0.))
+                    label = f"预测 (+{horizon*1000:.0f} ms)" if horizon else "估计"
+                    traces.append((label, [v+horizon for v in t], h["est_" + axis], "dot"))
+                plot.figure = self._figure(f"{axis} [{unit}]: 命令 / 实际 / 估计", traces)
             traces = [("横向误差 [m]", t, h["ct"], "solid")]
             if np.isfinite(list(h["fl"])).any():
                 traces += [("|F| 左 /100 N", t, [v / 100 for v in h["fl"]], "dot"), ("|F| 右 /100 N", t, [v / 100 for v in h["fr"]], "dot")]
