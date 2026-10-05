@@ -8,7 +8,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
-from eval_v53_estimator_sim2sim_status import metrics
+from eval_homie_body_velocity import metrics
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'logs/bench/homie_official_weights_20260928'

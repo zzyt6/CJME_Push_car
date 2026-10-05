@@ -9,6 +9,8 @@ initial pose. The last sample is the goal.
                   at both ends, alternating left / right turns in between
     right_angle   straight -> 90 deg circular arc -> straight (left turn; mirror for right)
     u_turn        straight -> 180 deg semicircle -> straight back (left; mirror for right)
+    composite_course  wide sinusoidal S -> 2 m connector -> raised rectangular detour with rounded corners;
+                      total arc length 20 m, start and finish on the same forward axis and heading
 """
 from __future__ import annotations
 
@@ -191,7 +193,65 @@ def s_bend(radius: float = 0.6, lead: float = 1.0, ds: float = 0.02) -> Path:
     return resample(np.concatenate([a, arc1, arc2, arc3, b]), ds, "s_bend", {"type": "s_bend", "radius": radius, "lead": lead})
 
 
-GENERATORS = {"straight": straight, "s_curve": s_curve, "s_bend": s_bend, "right_angle": right_angle, "u_turn": u_turn}
+def composite_course(total_length: float = 20.0, lead: float = 0.3, s_length: float = 8.0,
+                     amplitude: float = 0.7, middle: float = 2.0, corner_radius: float = 1.25,
+                     height: float = 2.7, finish: float = 0.3, ds: float = 0.02) -> Path:
+    """A full sinusoidal positive/negative S followed by a raised rectangular detour.
+
+    A cosine ramp of the sine phase makes both ends horizontal with zero curvature;
+    the two sine extrema retain the requested +/- amplitude. Four rounded 90-degree
+    corners raise the path, continue forward, then return it to y=0, as in the sketch.
+    The top straight absorbs the length budget, without shrinking either turning
+    radius or the separate ``middle`` connector. ``total_length`` is route arc length,
+    not the horizontal start-to-finish distance.
+    """
+    values = (total_length, lead, s_length, amplitude, middle, corner_radius, height, finish, ds)
+    if not all(math.isfinite(v) and v > 0.0 for v in values):
+        raise ValueError("Composite-course dimensions and sample spacing must be finite and positive")
+    if height <= 2.0 * corner_radius:
+        raise ValueError("height must exceed twice corner_radius to retain the vertical straight sections")
+    r = corner_radius
+    u = np.linspace(0.0, 1.0, 8001)
+    ramp = 0.2
+    phase_speed = 1.0 / (1.0 - ramp)
+    phase = np.where(u < ramp, phase_speed / 2 * (u - ramp / math.pi * np.sin(math.pi * u / ramp)),
+                     np.where(u > 1.0 - ramp,
+                              1.0 - phase_speed / 2 * ((1.0 - u) - ramp / math.pi * np.sin(math.pi * (1.0 - u) / ramp)),
+                              phase_speed * (u - ramp / 2)))
+    sine_y = amplitude * np.sin(2 * math.pi * phase)
+    sine_y[[0, -1]] = 0.0
+    sine = np.stack((lead + s_length * u, sine_y), axis=1)
+    corner_x = lead + s_length + middle
+
+    def points(top):
+        return np.concatenate([
+            _dense_line((0., 0.), (lead, 0.), 200),
+            sine[1:],
+            _dense_line((lead + s_length, 0.), (corner_x, 0.), 300)[1:],
+            _arc((corner_x, r), r, -math.pi / 2, 0., 1000)[1:],
+            _dense_line((corner_x + r, r), (corner_x + r, height - r), 200)[1:],
+            _arc((corner_x + 2 * r, height - r), r, math.pi, math.pi / 2, 1000)[1:],
+            _dense_line((corner_x + 2 * r, height), (corner_x + 2 * r + top, height), 200)[1:],
+            _arc((corner_x + 2 * r + top, height - r), r, math.pi / 2, 0., 1000)[1:],
+            _dense_line((corner_x + 3 * r + top, height - r), (corner_x + 3 * r + top, r), 200)[1:],
+            _arc((corner_x + 4 * r + top, r), r, math.pi, 3 * math.pi / 2, 1000)[1:],
+            _dense_line((corner_x + 4 * r + top, 0.), (corner_x + 4 * r + top + finish, 0.), 200)[1:],
+        ])
+
+    fixed = points(0.)
+    fixed_length = float(np.linalg.norm(np.diff(fixed, axis=0), axis=1).sum())
+    top = total_length - fixed_length
+    if top <= 0.0:
+        raise ValueError(f"total_length is too short for these bends and connector; must exceed {fixed_length:.3f} m")
+    return resample(points(top), ds, "composite_course", {
+        "type": "composite_course", "total_length": total_length, "lead": lead, "s_length": s_length,
+        "amplitude": amplitude, "middle": middle, "corner_radius": r, "height": height,
+        "finish": finish, "ds": ds,
+    })
+
+
+GENERATORS = {"straight": straight, "s_curve": s_curve, "s_bend": s_bend, "right_angle": right_angle,
+              "u_turn": u_turn, "composite_course": composite_course}
 
 
 def build_path(name: str, spec: dict, mirror: bool = False) -> Path:

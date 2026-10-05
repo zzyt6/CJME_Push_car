@@ -2,6 +2,7 @@
 
     passthrough            task command straight into the frozen HOMIE, upper body held at the grasp pose
     two_stage:<ckpt|latest> trained high-level checkpoint (deterministic mean) on top of the frozen HOMIE
+    v6:<ckpt|latest>        V6 policy on the same fixed legacy four-sphere plant
     robot_only             HOMIE without the cart, tracked body = pelvis (upper bound, quantifies the cart's cost)
     plugin:<module>:<attr> any class implementing ``PolicyUnderTest`` (future RL stages)
 
@@ -263,16 +264,13 @@ class RobotOnlyPolicy:
 # ---------------------------------------------------------------------------- registry
 
 def parse_policy_spec(spec: str) -> dict:
-    """``passthrough`` | ``robot_only`` | ``two_stage:<ckpt|latest>`` | ``plugin:<module>:<attr>[:<arg>]``."""
+    """``passthrough`` | ``robot_only`` | ``two_stage:<ckpt|latest>`` | ``v6:<ckpt|latest>`` | plugin."""
     spec = spec.strip()
     if spec in ("passthrough", "robot_only"):
         return {"kind": spec}
     tag, _, checkpoint = spec.partition(":")
     if tag == "v6":
         return {"kind": "v6", "checkpoint": checkpoint or "latest"}
-    if tag in ("v53", "v53_original", "v53_new"):
-        return {"kind": "v53", "checkpoint": checkpoint or "latest",
-                "scene_version": {"v53": None, "v53_original": "original", "v53_new": "four_spheres"}[tag]}
     if spec.startswith("two_stage"):
         rest = spec[len("two_stage"):]
         ckpt = rest[1:] if rest.startswith(":") and len(rest) > 1 else "latest"
@@ -285,22 +283,17 @@ def parse_policy_spec(spec: str) -> dict:
         if len(parts) == 4:
             out["arg"] = parts[3]
         return out
-    raise ValueError(f"unknown policy spec {spec!r}; use passthrough | robot_only | two_stage[:ckpt|latest] | v53[:ckpt|latest] | v53_original | v53_new | plugin:module:Class")
+    raise ValueError(f"unknown policy spec {spec!r}; use passthrough | robot_only | two_stage[:ckpt|latest] | v6[:ckpt|latest] | plugin:module:Class")
 
 
 def make_policy(spec: str, level: int = 17, homie_checkpoint: Path | None = None, scene_version: str = "original"):
+    # Retain the old keyword only for callers passing its fixed default.
+    if scene_version != "original":
+        raise ValueError("One fixed legacy four-sphere backend is supported; scene selection is not supported")
     p = parse_policy_spec(spec)
     if p["kind"] == "v6":
-        if scene_version != "original":
-            raise ValueError("V6 has one fixed legacy four-sphere backend; scene selection is not supported")
         from .policies_v6 import V6Policy
         return V6Policy(p["checkpoint"], level, homie_checkpoint)
-    if p["kind"] == "v53":
-        from .policies_v53 import V53Policy
-        return V53Policy(p["checkpoint"], level, homie_checkpoint,
-                         scene_version=p["scene_version"] or scene_version)
-    if scene_version != "original":
-        raise ValueError("--scene_version applies to V5.3 bench policies; use v53_original/v53_new for a scene comparison")
     if p["kind"] == "passthrough":
         return PassthroughPolicy(level, homie_checkpoint)
     if p["kind"] == "robot_only":

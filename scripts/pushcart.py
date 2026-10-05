@@ -60,10 +60,10 @@ def main(argv=None):
     mj_teleop.add_argument("--render_hz", type=float, default=25.0)
     mj_teleop.add_argument("--hl", type=Path, help="high-level checkpoint: gamepad gives the task command, the policy corrects HOMIE")
     mj_teleop.add_argument("--level", type=int, default=6, help="curriculum level defining the correction scale (with --hl)")
-    mj_view = mj_sub.add_parser("view", help="two-stage viewer: trained high-level checkpoint + frozen HOMIE in MuJoCo, viser rendering, "
-                                             "eval scenarios / gamepad / sliders, live plots (default: newest checkpoint of the newest run)")
-    mj_view.add_argument("--checkpoint", type=Path, help="high-level model_*.pt (default: newest of --run or of the newest run)")
-    mj_view.add_argument("--run", type=Path, help="training run directory or name under logs/rsl_rl/homie_pushcart")
+    mj_view = mj_sub.add_parser("view", help="legacy/V3 and V6 two-stage viewer: choose a training run and checkpoint; "
+                                             "eval scenarios / gamepad / sliders, live plots; cart visual mesh only")
+    mj_view.add_argument("--checkpoint", type=Path, help="legacy/V3 or V6 model_*.pt (default: newest checkpoint across both log roots)")
+    mj_view.add_argument("--run", type=Path, help="training run directory or name under homie_pushcart or homie_pushcart_v6 logs")
     mj_view.add_argument("--homie_checkpoint", type=Path)
     mj_view.add_argument("--level", type=int, help="curriculum level for the correction scale (default: top level)")
     mj_view.add_argument("--scenario", help="start in this eval scenario (default: manual command)")

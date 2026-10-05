@@ -1,6 +1,6 @@
 # V6：V3.2 基线上的车速与双手载荷估计
 
-V6 按 [实施计划](push_cart_v6_plan.md) 独立实现，基线是 V3.2 `2026-09-21_16-56-46_v3_1_speed_quality_scratch/model_19999.pt` 的保存配置。原 V3/V5 代码和结果保留为历史，V6 不加载旧版本高层检查点。
+V6 按 [实施计划](push_cart_v6_plan.md) 独立实现，基线是 V3.2 `2026-09-21_16-56-46_v3_1_speed_quality_scratch/model_19999.pt` 的保存配置。V3及更早版本代码、模型和测试保留；V4/V5独立版本已按后续要求清理，见[清理记录](project_cleanup_20260930.md)。V6 不加载旧版本高层检查点。
 
 ## 唯一物理与原奖励
 
@@ -36,6 +36,8 @@ PPO主干沿V3.2，两个监督优化器不接受PPO梯度。保存／恢复包�
 
 ## 训练与运行
 
+需要在同一个手柄／滑条查看器里切换V3与V6时，使用 `run_two_stage_viewer.ps1`，从“训练运行”和“检查点”选择模型；详见[两级策略查看器](two_stage_viewer.md)。推车仅显示可视化网格，碰撞体不再叠加。
+
 正式训练入口（不会自动加载V3.2权重；新网络需要训练）：
 
 ```powershell
@@ -57,12 +59,14 @@ PPO主干沿V3.2，两个监督优化器不接受PPO梯度。保存／恢复包�
 训练足够的V6模型后，打开原bench页面：
 
 ```powershell
-.\run_v6_bench_viewer.ps1 -Checkpoint 'logs/rsl_rl/homie_pushcart_v6/<run>/model_19999.pt' -Payload 29 -Speed 0.5 -PathName s_large
+.\run_v6_bench_viewer.ps1 -Payload 15 -Speed 0.5 -PathName composite_course -Port 8090
 ```
+
+默认赛道为 `composite_course`：舒缓的正弦S弯、2 m连接直线、上抬后回落的圆角绕行段，起终点同轴同向，中心线弧长精确20 m。见 [赛道平面图与参数](push_cart_composite_course.md)。原历史路线仍可选择。Viser「模型选择」支持V6和旧V3训练运行／检查点，点「开始」后加载并从起点复位；也支持 `-Checkpoint` 或 `-Run` 直接指定旧模型，见 [模型切换说明](push_cart_v6_bench_model_selection.md)。
 
 同一唯一场景可运行原path/step/robust测评：
 
-通用bench当前默认策略也已改为`v6:latest`；显式指定V3/V5仍可运行历史对照。
+通用bench当前默认策略为`v6:latest`；显式指定`two_stage:<V3检查点>`、`passthrough`或`robot_only`仍可运行早期对照。已移除V4/V5专属入口和候选场景选择。
 
 ```powershell
 .\run_pushcart_bench.ps1 path --policies 'v6:logs/rsl_rl/homie_pushcart_v6/<run>/model_19999.pt' --paths s_large --payload 29 --v_nom 0.5

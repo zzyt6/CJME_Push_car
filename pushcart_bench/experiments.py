@@ -137,26 +137,42 @@ def _exp_path_live(args, cfg, policies, viewer, store, follower_cfg, out_dir, pa
     seed = int(seeds[0]) if seeds else 0
     viewer.setup_live(path_names=names, policy_names=[p.name for p in policies], payload=float(payload),
                       v_nom=follower_cfg.v_nom, cruise=True, follower_defaults=cfg["follower"])
+    if getattr(args, "checkpoint_selection", False):
+        viewer.setup_checkpoint_selection(policies[0], level=policies[0].level,
+                                          homie_checkpoint=getattr(args, "homie_checkpoint", None))
     if getattr(args, "initial_path", None) in names:
         viewer.dd_path.value = args.initial_path
     elif "s_large" in names:
         viewer.dd_path.value = "s_large"
     print(f"[bench] live view -> {out_dir}", flush=True)
     print("[bench] viser: 待命中。调好镜头、开录后点「开始」。改路径/策略/载荷会重新摆位。Ctrl+C 退出。", flush=True)
+    preserve_ready = False
     try:
         while True:
             if not viewer.want_rerun:
-                _wait_for_start(viewer, policies, cfg, caster, seed)
+                _wait_for_start(viewer, policies, cfg, caster, seed, preserve_ready=preserve_ready)
+            preserve_ready = False
             viewer.want_rerun = False
             pname = viewer.dd_path.value
             if pname not in cfg["paths"]:
                 print(f"[bench] unknown path {pname!r}", flush=True)
                 continue
-            policy = next((p for p in policies if p.name == viewer.dd_pol.value), policies[0])
             path = build_path(pname, cfg["paths"][pname])
             fcfg = FollowerConfig.from_dict(follower_cfg.to_dict())
             viewer.sync_follower(fcfg, path_length=path.length)
             cond = Condition(payload_kg=float(viewer.sl_payload.value), caster_angle_deg=float(caster), seed=seed)
+            if viewer.live_policy is not None:
+                policy = viewer.prepare_selected_policy(cond)
+                if policy is None:
+                    # Do not reset or replace the old scene after a failed candidate load.
+                    preserve_ready = True
+                    continue
+                from .view import checkpoint_policy_spec
+                spec = checkpoint_policy_spec(viewer.loaded_checkpoint)
+                if spec not in store.meta["policies"]:
+                    store.meta["policies"].append(spec)
+            else:
+                policy = next((p for p in policies if p.name == viewer.dd_pol.value), policies[0])
             label = f"{pname} {cond.payload_kg:g}kg vx={fcfg.v_nom:.2f}"
             print(f"[bench] start {label}  {policy.name}  cruise={fcfg.cruise}", flush=True)
             res = run_path(policy, path, fcfg, cond, cfg, viewer=viewer, label=label)
@@ -172,7 +188,8 @@ def _exp_path_live(args, cfg, policies, viewer, store, follower_cfg, out_dir, pa
 
 
 def _ready_key(viewer):
-    return (viewer.dd_path.value, viewer.dd_pol.value, round(float(viewer.sl_payload.value), 1))
+    policy_name = viewer.live_policy.name if viewer.live_policy is not None else viewer.dd_pol.value
+    return (viewer.dd_path.value, policy_name, round(float(viewer.sl_payload.value), 1))
 
 
 def _show_ready(viewer, policies, cfg, caster, seed):
@@ -181,7 +198,7 @@ def _show_ready(viewer, policies, cfg, caster, seed):
     if pname not in cfg["paths"]:
         viewer.status.content = f"- 未知路径 `{pname}`"
         return
-    policy = next((p for p in policies if p.name == viewer.dd_pol.value), policies[0])
+    policy = viewer.live_policy or next((p for p in policies if p.name == viewer.dd_pol.value), policies[0])
     cond = Condition(payload_kg=float(viewer.sl_payload.value), caster_angle_deg=float(caster), seed=int(seed))
     cond.apply(policy)
     x0, y0, yaw0 = policy.pose()
@@ -196,8 +213,8 @@ def _show_ready(viewer, policies, cfg, caster, seed):
         viewer.renderer.update(policy.env.data)
 
 
-def _wait_for_start(viewer, policies, cfg, caster, seed):
-    last = None
+def _wait_for_start(viewer, policies, cfg, caster, seed, *, preserve_ready=False):
+    last = _ready_key(viewer) if preserve_ready else None
     while not viewer.want_rerun:
         key = _ready_key(viewer)
         if key != last:

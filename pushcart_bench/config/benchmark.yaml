@@ -58,6 +58,16 @@ gain_sweep:
 # Experiment 1: the four representative paths (local frame, start at the tracked body, heading +x). All turn left;
 # --mirror adds the right-turning copies of the entries in `mirror`.
 paths:
+  composite_course:              # 20 m arc length; broad sinusoidal S -> 2 m straight -> rounded rectangular detour
+    type: composite_course
+    total_length: 20.0
+    lead: 0.3
+    s_length: 8.0
+    amplitude: 0.7
+    middle: 2.0
+    corner_radius: 1.25
+    height: 2.7
+    finish: 0.3
   straight:
     type: straight
     length: 6.0

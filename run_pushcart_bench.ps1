@@ -1,13 +1,13 @@
 ﻿# Push-cart control benchmark (MuJoCo + viser, CPU). Same paths / steps / disturbances / high-level PID for every policy.
 #
 #   .\run_pushcart_bench.ps1 path   --policies passthrough two_stage:latest --view                 # large S, live payload/speed
-#   .\run_pushcart_bench.ps1 path   --policies v53_original:latest v53_new:latest --view --level 13
+#   .\run_pushcart_bench.ps1 path   --policies v6:latest --view
 #   .\run_pushcart_bench.ps1 path   --paths s_curve right_angle --mirror --seeds 0 1 2            # subset, right-turn copies
 #   .\run_pushcart_bench.ps1 step   --policies passthrough two_stage:latest                       # experiment 2
 #   .\run_pushcart_bench.ps1 robust --policies passthrough two_stage:latest --factors payload_kg kick
 #   .\run_pushcart_bench.ps1 report --out_dir logs\bench\<dir>                                        # regenerate tables / figures
 #
-# Policies: passthrough | robot_only | two_stage[:<model_N.pt>|:latest] | plugin:<module>:<Class>[:<arg>]
+# Policies: passthrough | robot_only | two_stage[:<model_N.pt>|:latest] | v6[:<model_N.pt>|:latest] | plugin:<module>:<Class>[:<arg>]
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RunArgs

@@ -1,4 +1,4 @@
-"""Cross-version MuJoCo benchmark (V3 ... V5.2) with interaction, balance and force-estimation metrics.
+"""Legacy MuJoCo benchmark (passthrough, V3, V3.1, V3.2) with interaction and balance metrics.
 
 One worker process per policy (``--worker``); the parent launches them in parallel and then summarizes.
 Every policy uses the same MuJoCo scene, payload model, HOMIE model_60000, follower gains and seeds.
@@ -23,14 +23,11 @@ for p in (ROOT, ROOT / "HomieRL", ROOT / "HomieRL" / "rsl_rl"):
 
 RUNS = ROOT / "logs/rsl_rl"
 VERSIONS = {
-    "V3": ("v4pkg", RUNS / "homie_pushcart/2026-09-18_06-37-12_v3e_full/model_12600.pt"),
-    "V3.1": ("v4pkg", RUNS / "homie_pushcart/2026-09-20_21-22-19_v3_1_combined_scratch/model_19999.pt"),
-    "V3.2": ("v4pkg", RUNS / "homie_pushcart/2026-09-21_16-56-46_v3_1_speed_quality_scratch/model_19999.pt"),
-    "V4": ("v4pkg", RUNS / "homie_pushcart/2026-09-22_18-22-27_v4_speed_quality_scratch/model_19999.pt"),
-    "V5.1": ("homie_pushcart_v51", RUNS / "homie_pushcart_v51/2026-09-25_04-06-26_v51_interaction_privileged_20k/model_14600.pt"),
-    "V5.2": ("homie_pushcart_v52", RUNS / "homie_pushcart_v52/2026-09-26_01-56-48_v52_hand_estimator_20k/model_19999.pt"),
+    "V3": RUNS / "homie_pushcart/2026-09-18_06-37-12_v3e_full/model_12600.pt",
+    "V3.1": RUNS / "homie_pushcart/2026-09-20_21-22-19_v3_1_combined_scratch/model_19999.pt",
+    "V3.2": RUNS / "homie_pushcart/2026-09-21_16-56-46_v3_1_speed_quality_scratch/model_19999.pt",
 }
-ORDER = ["passthrough", "V3", "V3.1", "V3.2", "V4", "V5.1", "V5.2"]
+ORDER = ["passthrough", "V3", "V3.1", "V3.2"]
 PAYLOADS = [0.0, 12.5, 25.0]
 PATHS = ["s_large", "s_large_mirror", "s_curve"]
 STEPS = ["vx_0_to_03", "vx_0_to_06", "stop_06", "wz_p03", "wz_m03", "hold"]
@@ -43,16 +40,14 @@ PULSE_CMDS = {"move03": (0.3, 0., 0.), "stand": (0., 0., 0.)}
 
 # ============================================================================ worker
 def make(label: str):
-    from pushcart_bench.policies_v5x import V5xPolicy, install_instrumented_env
+    from pushcart_bench.instrumentation import install_instrumented_env
     from pushcart_bench.extra_metrics import Recorder
     install_instrumented_env()
     from pushcart_bench.policies import PassthroughPolicy, TwoStagePolicy
     if label == "passthrough":
         policy = PassthroughPolicy(17)
     else:
-        kind, ckpt = VERSIONS[label]
-        policy = (TwoStagePolicy(ckpt, 17, name=label) if kind == "v4pkg"
-                  else V5xPolicy(kind, ckpt, 17, name=label, scene_profile="legacy"))
+        policy = TwoStagePolicy(VERSIONS[label], 17, name=label)
     return policy, Recorder(policy)
 
 
@@ -155,7 +150,9 @@ def summarize(out: Path):
         if f.is_file():
             data[label] = json.loads(f.read_text(encoding="utf-8"))
     labels = [l for l in ORDER if l in data]
-    colors = dict(zip(ORDER, ["#9ca3af", "#a3a3a3", "#60a5fa", "#2563eb", "#f59e0b", "#10b981", "#dc2626"]))
+    if not labels:
+        raise ValueError(f"No retained V3/passthrough results found in {out}")
+    colors = dict(zip(ORDER, ["#9ca3af", "#a3a3a3", "#60a5fa", "#2563eb"]))
 
     def path_mean(label, key, payload, src="metrics", paths=("s_large", "s_large_mirror")):
         vals = [r[src].get(key) for r in data[label]["paths"] if r["payload_kg"] == payload and r["path"] in paths]
@@ -258,49 +255,8 @@ def summarize(out: Path):
     fig.savefig(out / "fig3_pulse_metrics.pdf")
     plt.close(fig)
 
-    # Estimator accuracy (V5.1 resultant head vs V5.2 per-hand estimator + composition).
-    for l in labels:
-        summary["estimator"][l] = data[l].get("estimator", {})
-    est_labels = [l for l in labels if summary["estimator"][l]]
-    if est_labels:
-        fig, axes = plt.subplots(1, 3, figsize=(16, 4.5), constrained_layout=True)
-        ax = axes[0]
-        for i, l in enumerate(est_labels):
-            e = summary["estimator"][l]
-            vals = [e.get(f"est_handle_vs_mean_{n}_r2") for n in ("Fx", "Fy", "Mz")]
-            ax.bar(np.arange(3) + (i - .5) * .38, [np.nan if v is None else v for v in vals], width=.38, color=colors[l], label=l)
-        ax.set_xticks(range(3), ["Fx", "Fy", "Mz"])
-        ax.set_ylim(min(0, ax.get_ylim()[0]), 1)
-        ax.set_title("Handle resultant R² (MuJoCo, vs 4-substep mean)")
-        ax.legend()
-        ax.grid(axis="y", alpha=.25)
-        ax = axes[1]
-        e = summary["estimator"].get("V5.2", {})
-        hnames = [f"{s}_{a}" for s in ("L", "R") for a in ("fx", "fy", "fz", "mx", "my", "mz")]
-        if e:
-            ax.bar(np.arange(12) - .2, [np.nan if e.get(f"est_hand_{n}_r2") is None else e[f"est_hand_{n}_r2"] for n in hnames],
-                   width=.4, color=colors["V5.2"], label="V5.2 estimator")
-            ax.bar(np.arange(12) + .2, [np.nan if e.get(f"prior_hand_{n}_r2") is None else e[f"prior_hand_{n}_r2"] for n in hnames],
-                   width=.4, color="#6b7280", label="(J^T)^+ tau prior alone")
-            ax.set_xticks(range(12), hnames, rotation=45, fontsize=7)
-            ax.set_ylim(min(-0.5, ax.get_ylim()[0]), 1)
-            ax.legend(fontsize=8)
-        ax.set_title("V5.2 per-hand R² (MuJoCo)")
-        ax.grid(axis="y", alpha=.25)
-        ax = axes[2]
-        for l in est_labels:
-            f = out / f"pulse_{l}_move03_-Fx20_hold3s.npz"
-            if f.is_file():
-                d = np.load(f)
-                t = (np.arange(len(d["F"])) - int(d["t0"])) * 0.02
-                ax.plot(t, d["F"][:, 0], color=colors[l], alpha=.35, lw=.8)
-                ax.plot(t, d["pred"][:, 0], color=colors[l], lw=1.4, label=f"{l} pred (thin = truth)")
-        ax.set_title("Sustained -20 N resistance: handle Fx")
-        ax.set_xlabel("s from onset")
-        ax.legend(fontsize=8)
-        fig.savefig(out / "fig4_estimator.png", dpi=150)
-        fig.savefig(out / "fig4_estimator.pdf")
-        plt.close(fig)
+    # The retained historical controllers have no learned hand-force head.
+    summary["estimator"] = {label: data[label].get("estimator", {}) for label in labels}
 
     # Force spectra on the same path (wide S, 12.5 kg): gait-coupled ripple.
     from scipy import signal as sg
@@ -353,8 +309,8 @@ def summarize(out: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=ROOT / "logs/bench/versions_20k")
-    ap.add_argument("--worker")
-    ap.add_argument("--labels", nargs="*", default=ORDER)
+    ap.add_argument("--worker", choices=ORDER)
+    ap.add_argument("--labels", nargs="*", choices=ORDER, default=ORDER)
     ap.add_argument("--summarize_only", action="store_true")
     ap.add_argument("--trace_stride", type=int, default=5)
     ap.add_argument("--quick", action="store_true", help="smoke test: one path/payload, two steps, two pulses")

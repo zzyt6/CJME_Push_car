@@ -1,7 +1,7 @@
 """Interaction, balance and force-estimation metrics from full-rate (200 Hz) grasp-wrench recordings.
 
-Used on top of the standard bench metrics. ``Recorder`` wraps a cart policy (V3 ... V5.2) whose
-environment is ``policies_v5x.InstrumentedEnv`` and stores, per control step, the four physics-step
+Used on top of the standard bench metrics. ``Recorder`` wraps a cart policy whose
+environment is ``instrumentation.InstrumentedEnv`` and stores, per control step, the four physics-step
 weld solves. Everything is expressed in upright cart-heading axes unless stated otherwise.
 
 Definitions (all window statistics over the caller's index window):

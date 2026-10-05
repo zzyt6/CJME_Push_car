@@ -22,7 +22,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from eval_homie_body_velocity import command, cases
-from eval_v53_estimator_sim2sim_status import metrics
+from eval_homie_body_velocity import metrics
 
 SOURCE = ROOT / '.cache/homie_official_weights'
 

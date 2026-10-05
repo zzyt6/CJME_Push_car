@@ -1,0 +1,35 @@
+{
+  "arc_length_m": 19.999999999999243,
+  "sampled_polyline_length_m": 19.999889427632635,
+  "start": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "goal": [
+    16.122260906390487,
+    0.0,
+    8.673617379884035e-19
+  ],
+  "sine_arc_length_m": 8.623758268707455,
+  "sine_min_radius_m": 1.4826584315838198,
+  "sine_max_heading_deg": 34.496013230346755,
+  "whole_min_radius_m": 1.2493127273415923,
+  "gap_m": 2.0,
+  "top_straight_m": 0.5222609063904855,
+  "lateral_bounds_m": [
+    -0.6999848102608314,
+    2.7
+  ],
+  "config": {
+    "type": "composite_course",
+    "total_length": 20.0,
+    "lead": 0.3,
+    "s_length": 8.0,
+    "amplitude": 0.7,
+    "middle": 2.0,
+    "corner_radius": 1.25,
+    "height": 2.7,
+    "finish": 0.3
+  }
+}

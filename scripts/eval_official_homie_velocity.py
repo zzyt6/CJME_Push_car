@@ -84,7 +84,7 @@ def main():
         from isaaclab.app import AppLauncher
         launcher = AppLauncher(headless=True, device=a.device)
     import eval_homie_body_velocity as bench
-    import homie_pushcart_v52.lowlevel as low
+    import homie_pushcart.lowlevel as low
     import numpy as np
     import torch
     low.HimLowLevelPolicy = lambda checkpoint, device='cpu': OfficialOnnxPolicy(checkpoint, device, a.obs_profile)
@@ -103,7 +103,9 @@ def main():
     bench.config_free = config
     try:
         probe = OfficialOnnxPolicy(obs_profile=a.obs_profile)
-        observations = np.load(ROOT/'logs/bench/homie_body_velocity_20260928/mujoco_free_final/samples.npz')['low_observation'][100::20].reshape(-1, 456)
+        # Check the diagnostic graph without depending on an archived benchmark.
+        # Real rollout observations are still used for the velocity assessment below.
+        observations = np.random.default_rng(20260928).normal(0., .2, (64, 456)).astype(np.float32)
         x = probe.prepare(torch.tensor(observations))
         original = probe.original.run(None, {probe.input_name: x})[0]
         diagnostic = probe.session.run(None, {probe.input_name: x})[0]

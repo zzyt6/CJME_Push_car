@@ -3,9 +3,21 @@ from __future__ import annotations
 
 from collections import deque
 import math
+from pathlib import Path
+from threading import RLock
 import time
 
 import numpy as np
+
+
+def checkpoint_policy_spec(checkpoint) -> str:
+    """Route V3/V6 checkpoints or None (passthrough) to the matching bench adapter."""
+    if checkpoint is None:
+        return "passthrough"
+    from homie_pushcart.mujoco_viewer import checkpoint_family
+    path = Path(checkpoint).resolve()
+    kind = "v6" if checkpoint_family(path) == "v6" else "two_stage"
+    return f"{kind}:{path}"
 
 
 class BenchViewer:
@@ -29,7 +41,7 @@ class BenchViewer:
             self.sl_payload = gui.add_slider("载荷 [kg]", 0.0, 50.0, 0.5, 5.0)
             self.cb_cruise = gui.add_checkbox("保持指定速度 (弯道不减速)", True)
             self.btn_start = gui.add_button("开始", color="green")
-            self.btn_start.on_click(lambda _: setattr(self, "want_rerun", True))
+            self.btn_start.on_click(lambda _: self.request_start())
         with gui.add_folder("显示"):
             self.follow = gui.add_checkbox("镜头跟随", True)
             self.speed = gui.add_slider("播放倍率 (1 = 实时, 0 = 不限速)", 0.0, 4.0, 0.1, speed)
@@ -43,6 +55,8 @@ class BenchViewer:
         self.results_rows = []
         self.camera_offset = np.array([-4.0, -5.0, 2.8])
         self.want_rerun = False
+        self.live_policy = None
+        self._selection_lock = RLock()
         self._k_curv0 = 0.6
         self._vmin0 = 0.35
         self._la_max0 = 1.0
@@ -53,6 +67,142 @@ class BenchViewer:
         self._path_handle = self._goal_handle = self._la_handle = self._trail_handle = None
         self._path_handles = []
         print(f"[bench-view] viser: http://localhost:{self.server.get_port()}", flush=True)
+
+    def request_start(self):
+        """Snapshot the checkpoint at the button click; load only in the simulation thread."""
+        with self._selection_lock:
+            if self.live_policy is not None:
+                try:
+                    self.requested_checkpoint = self._checkpoint_from_gui()
+                except (ValueError, FileNotFoundError) as exc:
+                    self.md_load.content = f"**无法开始：** `{exc}`。当前模型保持不变。"
+                    return
+            self.want_rerun = True
+
+    def setup_checkpoint_selection(self, policy, *, level=17, homie_checkpoint=None):
+        """Optional V6 entry-point controls. Merely listing runs never loads their tensors."""
+        from homie_pushcart.mujoco_viewer import checkpoint_family, list_checkpoints, list_viewer_runs
+        self.live_policy = policy
+        self._policy_level, self._homie_checkpoint = level, homie_checkpoint
+        self.loaded_checkpoint = Path(policy.hl_checkpoint).resolve()
+        self.selected_checkpoint = self.requested_checkpoint = self.loaded_checkpoint
+        self._syncing_checkpoints = False
+        runs = set(list_viewer_runs()) | {self.loaded_checkpoint.parent}
+        self.run_choices = {"passthrough · 直通 HOMIE": None}
+        for run in sorted(runs, key=lambda p: (p.name, str(p.parent)), reverse=True):
+            try:
+                family = "V6" if checkpoint_family(run) == "v6" else "V3 / 更早版本"
+            except Exception:
+                family = "配置待检查"
+            label = f"{family} · {run.name}"
+            if label in self.run_choices:
+                label += f" ({run.parent})"
+            self.run_choices[label] = run
+        initial_run = next(label for label, path in self.run_choices.items() if path == self.loaded_checkpoint.parent)
+        self.dd_pol.visible = False
+        with self.server.gui.add_folder("模型选择"):
+            self.dd_run = self.server.gui.add_dropdown("模型 / 训练运行", tuple(self.run_choices), initial_value=initial_run)
+            names = [p.name for p in list_checkpoints(self.loaded_checkpoint.parent)]
+            if self.loaded_checkpoint.name not in names:
+                names.append(self.loaded_checkpoint.name)
+            self.dd_ckpt = self.server.gui.add_dropdown("检查点", tuple(names), initial_value=self.loaded_checkpoint.name)
+            self.md_model = self.server.gui.add_markdown(f"当前模型：**{policy.name}**")
+            self.md_load = self.server.gui.add_markdown("选择模型和检查点后，点击 **开始** 加载并从起点重新运行。passthrough 无需检查点。")
+        self._checkpoint_run = self.loaded_checkpoint.parent
+        self._checkpoint_names = tuple(names)
+        self.dd_run.on_update(lambda _: self._select_run())
+        self.dd_ckpt.on_update(lambda _: self._select_checkpoint())
+
+    def _select_run(self):
+        self._select_checkpoint()
+
+    def _select_checkpoint(self):
+        with self._selection_lock:
+            if self._syncing_checkpoints:
+                return
+            try:
+                checkpoint = self._checkpoint_from_gui()
+            except (ValueError, FileNotFoundError) as exc:
+                self.md_load.content = f"**选择无效：** `{exc}`。当前模型保持不变。"
+                return
+            selected = "passthrough · 直通 HOMIE（无需检查点）" if checkpoint is None else f"{checkpoint.parent.name}/{checkpoint.name}"
+            self.md_load.content = f"待加载：`{selected}`。点击 **开始** 生效。"
+
+    def _checkpoint_from_gui(self):
+        """Resolve a consistent current GUI pair; browser callbacks can arrive out of order.
+
+        The lock serializes our callbacks. Viser updates handle values before scheduling
+        them, so also recheck the run after disk discovery and after reading the filename.
+        A late run callback must not replace a checkpoint the user already selected.
+        """
+        from homie_pushcart.mujoco_viewer import list_checkpoints
+        while True:
+            run_label = self.dd_run.value
+            run = self.run_choices[run_label]
+            if run is None:
+                self._syncing_checkpoints = True
+                try:
+                    self.dd_ckpt.disabled = True
+                    self._checkpoint_names = ("无需检查点",)
+                    self.dd_ckpt.options = self._checkpoint_names
+                    self.dd_ckpt.value = self._checkpoint_names[0]
+                    self._checkpoint_run = None
+                finally:
+                    self._syncing_checkpoints = False
+                if self.dd_run.value != run_label:
+                    continue
+                self.selected_checkpoint = None
+                return None
+            if self._checkpoint_run != run:
+                checkpoints = list_checkpoints(run)
+                if self.dd_run.value != run_label:
+                    continue
+                if not checkpoints:
+                    raise FileNotFoundError(f"该运行没有可用检查点：{run}")
+                self._syncing_checkpoints = True
+                try:
+                    self._checkpoint_names = tuple(p.name for p in checkpoints)
+                    self.dd_ckpt.options = self._checkpoint_names
+                    self.dd_ckpt.value = checkpoints[-1].name
+                    self.dd_ckpt.disabled = False
+                    self._checkpoint_run = run
+                finally:
+                    self._syncing_checkpoints = False
+            filename = self.dd_ckpt.value
+            if self.dd_run.value != run_label:
+                continue
+            if filename not in self._checkpoint_names:
+                raise ValueError(f"检查点 {filename!r} 不属于当前训练运行 {run.name}")
+            checkpoint = (run / filename).resolve()
+            if checkpoint.parent != run or not checkpoint.is_file():
+                raise FileNotFoundError(checkpoint)
+            self.selected_checkpoint = checkpoint
+            return checkpoint
+
+    def prepare_selected_policy(self, condition):
+        """Build and reset a candidate before committing; failed loads leave the live plant intact."""
+        from .policies import make_policy
+        checkpoint = self.requested_checkpoint
+        if checkpoint == self.loaded_checkpoint:
+            self.md_load.content = "使用当前模型，从起点重新运行。"
+            return self.live_policy
+        selected = "passthrough" if checkpoint is None else f"{checkpoint.parent.name}/{checkpoint.name}"
+        self.md_load.content = f"正在加载 `{selected}`…"
+        try:
+            if checkpoint is not None and not checkpoint.is_file():
+                raise FileNotFoundError(checkpoint)
+            candidate = make_policy(checkpoint_policy_spec(checkpoint), level=self._policy_level,
+                                    homie_checkpoint=self._homie_checkpoint, scene_version="original")
+            condition.apply(candidate)
+        except Exception as exc:
+            self.md_load.content = f"**加载失败：** `{type(exc).__name__}: {exc}`\n\n当前模型 **{self.live_policy.name}** 保持不变。"
+            print(f"[bench-view] checkpoint load failed: {checkpoint}: {exc}", flush=True)
+            return None
+        self.live_policy = candidate
+        self.loaded_checkpoint = checkpoint
+        self.md_model.content = f"当前模型：**{candidate.name}**"
+        self.md_load.content = "模型已加载；从起点重新运行，观测历史、估计器历史和轨迹已重置。"
+        return candidate
 
     def setup_live(self, path_names, policy_names, payload: float = 5.0, v_nom: float = 0.5, cruise: bool = True,
                    follower_defaults=None):
@@ -131,8 +281,7 @@ class BenchViewer:
         model = policy.env.model
         if self.renderer is None or self._model_id != id(model):
             if self.renderer is not None:
-                for handle in list(self.renderer.handles.values()) + list(self.renderer.collision_handles.values()):
-                    handle.remove()
+                self.renderer.remove()
             self.renderer = self._Renderer(self.server, model)
             self._model_id = id(model)
         self.renderer.update(policy.env.data)
@@ -142,7 +291,10 @@ class BenchViewer:
             self._trail_handle = None
         for h in self.hist.values():
             h.clear()
+        for axis, plot in (("vx", self.plot_v), ("vy", self.plot_y), ("wz", self.plot_w), ("横向误差 / 抓握力", self.plot_e)):
+            plot.figure = self._figure(axis, [])
         self._steps = 0
+        self._last_plot = 0.0
         self._next_tick = time.perf_counter()
         self.title.content = f"### 推车控制对比实验\n{label} · 策略 **{policy.name}**"
         scene = self.server.scene
@@ -245,6 +397,8 @@ class BenchViewer:
             self.plot_e.figure = self._figure("横向误差 / 抓握力", traces)
 
     def end_run(self, result: dict):
+        if self.want_rerun:
+            return  # User restart is not a completed run or a timeout.
         m = result["metrics"]
         if result["kind"] == "path":
             row = (f"| {result['label']} | {result['policy']['name']} | {'✓' if m.get('success') else (m.get('failure') or 'timeout')} | "

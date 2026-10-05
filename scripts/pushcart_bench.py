@@ -5,7 +5,7 @@
     pushcart_bench.py robust --policies passthrough two_stage:latest [--factors payload_kg kick ...]
     pushcart_bench.py report --out_dir logs/bench/<dir>
 
-Policy specs: passthrough | robot_only | two_stage[:<model_N.pt>|:latest] | plugin:<module>:<Class>[:<arg>]
+Policy specs: passthrough | robot_only | two_stage[:<model_N.pt>|:latest] | v6[:<model_N.pt>|:latest] | plugin:<module>:<Class>[:<arg>]
 """
 from __future__ import annotations
 
@@ -21,9 +21,7 @@ for p in (ROOT, ROOT / "HomieRL", ROOT / "HomieRL" / "rsl_rl"):
 
 def _common(sp):
     sp.add_argument("--policies", nargs="+", default=["v6:latest"],
-                    help="v6[:ckpt|latest] (fixed legacy four-sphere plant); archived: passthrough | robot_only | two_stage | v53 | plugin:module:Class")
-    sp.add_argument("--scene_version", choices=("original", "four_spheres", "new"), default="original",
-                    help="scene for v53; v53_original/v53_new specs explicitly select their scene")
+                    help="v6[:ckpt|latest] | passthrough | robot_only | two_stage[:ckpt|latest] | plugin:module:Class; fixed legacy four-sphere plant")
     sp.add_argument("--level", type=int, help="curriculum level of the two-stage policy (correction scale); default from yaml")
     sp.add_argument("--homie_checkpoint", type=Path, help="HOMIE model_*.pt (default: the frozen model_60000)")
     sp.add_argument("--config", type=Path, help="benchmark.yaml (default: pushcart_bench/config/benchmark.yaml)")

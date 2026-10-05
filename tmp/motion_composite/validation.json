@@ -1,0 +1,100 @@
+{
+  "status": "pass",
+  "deck": "E:\\CJME_Push_car\\logs\\Picture\\motion_composite\\motion_ability_composite_powerpoint.pptx",
+  "deck_sha256": "00edaca2c55509fa45ac4d46f215cca021440a0a29e206c0b0405d377d2af024",
+  "paper_pdf_sha256": "c8517140b2eb8f367aacec9cca2345a75f7d07de4a141c63d90187dfb8f9daf8",
+  "render_sha256": "9a8653407a914653c64367c65195c35592e7f8bad196492e7e82d0b520b0ff6b",
+  "source_files_verified": 30,
+  "native_charts": 6,
+  "embedded_workbooks": 6,
+  "series_checked": 18,
+  "editable_sd_bands": 12,
+  "axis_rectangle_max_error_mm": 0.002053833007813921,
+  "axis_rectangle_errors_mm": [
+    0.0017039404975065509,
+    0.002053833007813921,
+    0.001477389865449652,
+    0.0017039404975065509,
+    0.002053833007813921,
+    0.001477389865449652
+  ],
+  "rendered_curve_extent_max_error_mm": 0.015293139088953467,
+  "trials": [
+    {
+      "engine": "isaac",
+      "axis": "vx",
+      "method": "CWC",
+      "raw_samples": 1200
+    },
+    {
+      "engine": "isaac",
+      "axis": "vx",
+      "method": "baseline",
+      "raw_samples": 1200
+    },
+    {
+      "engine": "isaac",
+      "axis": "vy",
+      "method": "CWC",
+      "raw_samples": 800
+    },
+    {
+      "engine": "isaac",
+      "axis": "vy",
+      "method": "baseline",
+      "raw_samples": 800
+    },
+    {
+      "engine": "isaac",
+      "axis": "wz",
+      "method": "CWC",
+      "raw_samples": 800
+    },
+    {
+      "engine": "isaac",
+      "axis": "wz",
+      "method": "baseline",
+      "raw_samples": 800
+    },
+    {
+      "engine": "mujoco",
+      "axis": "vx",
+      "method": "CWC",
+      "raw_samples": 1400
+    },
+    {
+      "engine": "mujoco",
+      "axis": "vx",
+      "method": "baseline",
+      "raw_samples": 1400
+    },
+    {
+      "engine": "mujoco",
+      "axis": "vy",
+      "method": "CWC",
+      "raw_samples": 1000
+    },
+    {
+      "engine": "mujoco",
+      "axis": "vy",
+      "method": "baseline",
+      "raw_samples": 1000
+    },
+    {
+      "engine": "mujoco",
+      "axis": "wz",
+      "method": "CWC",
+      "raw_samples": 1000
+    },
+    {
+      "engine": "mujoco",
+      "axis": "wz",
+      "method": "baseline",
+      "raw_samples": 1000
+    }
+  ],
+  "application": "Microsoft PowerPoint",
+  "application_path": "C:\\Program Files\\Microsoft Office\\root\\Office16",
+  "application_version": "16.0",
+  "runtime": "Existing OOXML builder retained because @oai/artifact-tool is unavailable on this host."
+}

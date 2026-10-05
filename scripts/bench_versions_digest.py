@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "logs/bench/versions_20k"
-ORDER = ["passthrough", "V3", "V3.1", "V3.2", "V4", "V5.1", "V5.2"]
+ORDER = ["passthrough", "V3", "V3.1", "V3.2"]
 
 
 def f(v, d=3):
@@ -17,8 +17,9 @@ def f(v, d=3):
 
 
 s = json.loads((out / "summary.json").read_text(encoding="utf-8"))
-labels = s["labels"]
-print("success (paths ok / total):", {l: s["success"][l] for l in labels}, "| step failures:", s["step_failures"])
+labels = [label for label in ORDER if label in s["labels"]]
+print("success (paths ok / total):", {l: s["success"][l] for l in labels}, "| step failures:",
+      {l: s["step_failures"][l] for l in labels})
 print("\n== paths (wide S + mirror mean), columns = 0 / 12.5 / 25 kg")
 for key, per in s["paths"].items():
     print(f"{key}")

@@ -1,0 +1,92 @@
+﻿{
+    "Application":  "Microsoft PowerPoint",
+    "Version":  "16.0",
+    "ApplicationPath":  "C:\\Program Files\\Microsoft Office\\root\\Office16",
+    "InputPath":  "E:\\CJME_Push_car\\tmp\\motion_composite\\powerpoint_factor.pptx",
+    "Charts":  [
+                   {
+                       "Name":  "Isaac Sim / PhysX vx native data chart",
+                       "PlotRectangleMm":  [
+                                               29.001360780927868,
+                                               45.71716796959771,
+                                               40,
+                                               32.5
+                                           ],
+                       "XMinimum":  0,
+                       "XMaximum":  28,
+                       "YMinimum":  -0.2,
+                       "YMaximum":  1.2000000000000002,
+                       "SeriesCount":  3
+                   },
+                   {
+                       "Name":  "Isaac Sim / PhysX vy native data chart",
+                       "PlotRectangleMm":  [
+                                               80.001360685560428,
+                                               45.71716796959771,
+                                               40,
+                                               32.5
+                                           ],
+                       "XMinimum":  0,
+                       "XMaximum":  20,
+                       "YMinimum":  -0.1,
+                       "YMaximum":  0.5,
+                       "SeriesCount":  3
+                   },
+                   {
+                       "Name":  "Isaac Sim / PhysX wz native data chart",
+                       "PlotRectangleMm":  [
+                                               131.00136462741429,
+                                               45.71716796959771,
+                                               40,
+                                               32.5
+                                           ],
+                       "XMinimum":  0,
+                       "XMaximum":  20,
+                       "YMinimum":  -0.4,
+                       "YMaximum":  0.60000000000000009,
+                       "SeriesCount":  3
+                   },
+                   {
+                       "Name":  "MuJoCo vx native data chart",
+                       "PlotRectangleMm":  [
+                                               29.001360780927868,
+                                               85.717167736477322,
+                                               40,
+                                               32.5
+                                           ],
+                       "XMinimum":  0,
+                       "XMaximum":  28,
+                       "YMinimum":  -0.2,
+                       "YMaximum":  1,
+                       "SeriesCount":  3
+                   },
+                   {
+                       "Name":  "MuJoCo vy native data chart",
+                       "PlotRectangleMm":  [
+                                               80.001360685560428,
+                                               85.717167736477322,
+                                               40,
+                                               32.5
+                                           ],
+                       "XMinimum":  0,
+                       "XMaximum":  20,
+                       "YMinimum":  -0.1,
+                       "YMaximum":  0.4,
+                       "SeriesCount":  3
+                   },
+                   {
+                       "Name":  "MuJoCo wz native data chart",
+                       "PlotRectangleMm":  [
+                                               131.00136462741429,
+                                               85.717167736477322,
+                                               40,
+                                               32.5
+                                           ],
+                       "XMinimum":  0,
+                       "XMaximum":  20,
+                       "YMinimum":  -0.2,
+                       "YMaximum":  0.60000000000000009,
+                       "SeriesCount":  3
+                   }
+               ]
+}

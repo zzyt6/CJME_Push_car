@@ -1,0 +1,277 @@
+{
+  "created_on": "2026-10-04",
+  "stage": "independent baseline copy; external force mechanism pending research",
+  "baseline_task": "Homie-G1-Direct-v0",
+  "new_task": "Homie-G1-HandForce-Direct-v0",
+  "shared_algorithm": "HomieRL/rsl_rl/rsl_rl (unchanged HIM-PPO)",
+  "files": [
+    {
+      "source": "HomieRL/homie_isaaclab/__init__.py",
+      "copy": "HomieRL/homie_hand_force/__init__.py",
+      "source_sha256": "cab70edcf95c0cacbbbfbb57747c640147c7f5bb9892586fc5c2f82fc96e5695",
+      "copy_sha256": "5562331116921669929c632280fc86386e7f3baa9bfea22c9883c57ff39df5a6",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/config.py",
+      "copy": "HomieRL/homie_hand_force/config.py",
+      "source_sha256": "820a85353ae61f889ab2d605748206aef3db92b098bfce592b2e9708e661f19b",
+      "copy_sha256": "820a85353ae61f889ab2d605748206aef3db92b098bfce592b2e9708e661f19b",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/direct_env.py",
+      "copy": "HomieRL/homie_hand_force/direct_env.py",
+      "source_sha256": "44bd5053381567b43cbddcc94853ab6e6bde2f6dedb2c386b00ea989c980bfd3",
+      "copy_sha256": "44bd5053381567b43cbddcc94853ab6e6bde2f6dedb2c386b00ea989c980bfd3",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/env.py",
+      "copy": "HomieRL/homie_hand_force/env.py",
+      "source_sha256": "b3b3d76f5ac1b0b20be91b5af246c8b328af6084b7b0d1b93e0ebaae9fd9cce0",
+      "copy_sha256": "4364bf6f86a838bd79f03174a61052ccf3438f78b9a854b8aefe69a7f911dbc3",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ],
+        [
+          ".cache/g1_isaaclab",
+          ".cache/g1_hand_force_isaaclab"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/lab_config.py",
+      "copy": "HomieRL/homie_hand_force/lab_config.py",
+      "source_sha256": "00e481ef35cee396a371b515ea5419cb641040ae27533805fc50a3afc9a71631",
+      "copy_sha256": "bd818de2b125dbb4d42fdfbb09ab1516b8882ec5330a8ae50e8454aa171035b5",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/math_utils.py",
+      "copy": "HomieRL/homie_hand_force/math_utils.py",
+      "source_sha256": "5a9646b517a652de08449ef56a89c3c4afe634a301c515c4d376871454a686ef",
+      "copy_sha256": "5a9646b517a652de08449ef56a89c3c4afe634a301c515c4d376871454a686ef",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/rsl_rl.py",
+      "copy": "HomieRL/homie_hand_force/rsl_rl.py",
+      "source_sha256": "fbcba26d9eb1ccde746f65ae9bd14c0a22279a91aca0879a11a6befa2116a42c",
+      "copy_sha256": "fbcba26d9eb1ccde746f65ae9bd14c0a22279a91aca0879a11a6befa2116a42c",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/run.py",
+      "copy": "HomieRL/homie_hand_force/run.py",
+      "source_sha256": "027bda6ac8fa3534243e936bb3a6f27f1eefe8c72bef841cc2cf8213159f5199",
+      "copy_sha256": "af8f1477464726d59a30c4c66d81147f0801fc1f28709b1b72e9410d1a274401",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ],
+        [
+          "report_dir = root / 'logs'",
+          "report_dir = root / 'logs/homie_hand_force'"
+        ],
+        [
+          "root / 'logs/smoke_result.json'",
+          "report_dir / 'smoke_result.json'"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/task_core.py",
+      "copy": "HomieRL/homie_hand_force/task_core.py",
+      "source_sha256": "77bd1758ec2273a6a67cc3310a29dc5f900d46a579f30791b8533e9bc21860ae",
+      "copy_sha256": "77bd1758ec2273a6a67cc3310a29dc5f900d46a579f30791b8533e9bc21860ae",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ]
+      ]
+    },
+    {
+      "source": "HomieRL/homie_isaaclab/training.py",
+      "copy": "HomieRL/homie_hand_force/training.py",
+      "source_sha256": "c68ce4770d40206d42dea077f2ca06e1a99edbf05e645d77e9f5d266dc35c2a4",
+      "copy_sha256": "ce0d0602db127058e70b65478d267827d9e22bc08ebd859ea0f25272a59c236d",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "Homie-G1-Direct-v0",
+          "Homie-G1-HandForce-Direct-v0"
+        ],
+        [
+          "homie_g1",
+          "homie_g1_hand_force"
+        ]
+      ]
+    },
+    {
+      "source": "scripts/homie.py",
+      "copy": "scripts/homie_hand_force.py",
+      "source_sha256": "6ac3f789db75ee473bc8def647b9d99eca81db55879265290e5178543b734ab8",
+      "copy_sha256": "ab6ffded18011fe2030763beb5dcfbaf9b44e9801a793996891d11a6fc5e5cfb",
+      "replacements": [
+        [
+          "homie_isaaclab",
+          "homie_hand_force"
+        ],
+        [
+          "run_homie.ps1",
+          "run_homie_hand_force.ps1"
+        ],
+        [
+          "ROOT / 'logs/environment.json'",
+          "ROOT / 'logs/homie_hand_force/environment.json'"
+        ],
+        [
+          "HOMIE G1 on local",
+          "HOMIE hand-force research copy (no external forces yet) on local"
+        ]
+      ]
+    },
+    {
+      "source": "run_homie.ps1",
+      "copy": "run_homie_hand_force.ps1",
+      "source_sha256": "d5a0f4521b57aebd0bbb6a87c83855eb97867eeb550a089f024df799698a0b45",
+      "copy_sha256": "0c898f5c397181c5ff425a8dc162e46abd62c33cc329d66cd6facddf623d0ddc",
+      "replacements": [
+        [
+          "scripts\\homie.py",
+          "scripts\\homie_hand_force.py"
+        ]
+      ]
+    },
+    {
+      "source": "train_homie.ps1",
+      "copy": "train_homie_hand_force.ps1",
+      "source_sha256": "fa0213bfb823e448ac14bc5feede313dc07c53d90320ac58afd0f0c8181c525c",
+      "copy_sha256": "4d3e54b036306beab3ca6df4b096a2f741eff9a7aadd9e78c2c479354ab44538",
+      "replacements": [
+        [
+          "run_homie.ps1",
+          "run_homie_hand_force.ps1"
+        ],
+        [
+          "# HOMIE author's training profile",
+          "# Independent HOMIE hand-force research task; currently baseline-equivalent"
+        ]
+      ]
+    }
+  ],
+  "baseline_checkpoint": {
+    "path": "logs/rsl_rl/homie_g1/2026-09-14_15-10-07_my_policy/model_60000.pt",
+    "sha256": "563125eaa4ff551a8573451e4babcee4359d3162efd31a34e199d1387a38ea36"
+  }
+}

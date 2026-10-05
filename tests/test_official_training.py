@@ -43,7 +43,14 @@ def make_algorithm():
 class OfficialTrainingTests(unittest.TestCase):
     def test_config_matches_author_sources(self):
         original_env, original_train = original_configs()
-        self.assertEqual(class_to_dict(G1RoughCfg()), class_to_dict(original_env))
+        local_env = class_to_dict(G1RoughCfg())
+        author_env = class_to_dict(original_env)
+        # The bridge's existing playback-only opt-in is deliberately disabled
+        # by default. It is not an author training parameter; all author fields
+        # must still match exactly, and any other extra field must fail below.
+        self.assertNotIn("upper_body_randomization", author_env["domain_rand"])
+        self.assertIs(local_env["domain_rand"].pop("upper_body_randomization"), False)
+        self.assertEqual(local_env, author_env)
         self.assertEqual(class_to_dict(G1RoughCfgPPO()), class_to_dict(original_train))
         official = HomieRunnerCfg()
         algorithm = official.algorithm.to_dict()

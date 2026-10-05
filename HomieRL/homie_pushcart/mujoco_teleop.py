@@ -19,7 +19,12 @@ from .teleop import CommandMapper
 # ---------------------------------------------------------------------------- viser renderer
 
 class MujocoViserRenderer:
-    """One viser mesh per MuJoCo geom; poses refreshed from geom_xpos / geom_xmat."""
+    """Render asset visuals, with an optional robot-only collision overlay.
+
+    The cart OBJ already includes its shelves, handles and wheels. Its auxiliary
+    primitive geoms are physics/debug representations, not additional visuals.
+    Rendering choices stay local to Viser: the MuJoCo model is never modified.
+    """
 
     def __init__(self, server, model: mujoco.MjModel, show_robot_collision: bool = False):
         import trimesh
@@ -28,11 +33,23 @@ class MujocoViserRenderer:
         self.server, self.model = server, model
         self.handles = {}
         self.collision_handles = {}
-        server.scene.add_grid("/ground", width=80, height=80, plane="xy", cell_size=0.5, section_size=2.0)
-        server.scene.add_frame("/world", axes_length=0.3, axes_radius=0.006)
+        self._scene_handles = [
+            server.scene.add_grid("/ground", width=80, height=80, plane="xy", cell_size=0.5, section_size=2.0),
+            server.scene.add_frame("/world", axes_length=0.3, axes_radius=0.006),
+        ]
+        cart_bodies = set()
+        for body_id in range(1, model.nbody):
+            body_name = model.body(body_id).name
+            if (body_name.startswith(("cart_", "wheel_", "caster_"))
+                    or int(model.body_parentid[body_id]) in cart_bodies):
+                cart_bodies.add(body_id)
         for g in range(model.ngeom):
             gtype = model.geom_type[g]
             if gtype in (mujoco.mjtGeom.mjGEOM_PLANE, mujoco.mjtGeom.mjGEOM_HFIELD):
+                continue
+            is_visual = model.geom_contype[g] == 0 and model.geom_conaffinity[g] == 0
+            is_cart = int(model.geom_bodyid[g]) in cart_bodies
+            if is_cart and not (is_visual and gtype == mujoco.mjtGeom.mjGEOM_MESH):
                 continue
             size = model.geom_size[g]
             if gtype == mujoco.mjtGeom.mjGEOM_MESH:
@@ -55,11 +72,9 @@ class MujocoViserRenderer:
             body = model.body(model.geom_bodyid[g]).name
             name = model.geom(g).name or f"{body}_g{g}"
             rgba = model.geom_rgba[g]
-            is_visual = model.geom_contype[g] == 0 and model.geom_conaffinity[g] == 0
-            is_cart = body.startswith(("cart_", "wheel_", "caster_"))
             color = tuple(int(255 * c) for c in rgba[:3])
-            opacity = None if rgba[3] >= 0.999 else float(rgba[3])
-            if is_visual or is_cart:
+            opacity = None if is_cart or rgba[3] >= 0.999 else float(rgba[3])
+            if is_visual:
                 self.handles[g] = server.scene.add_mesh_simple(f"/mj/{name}", verts, faces, color=color, opacity=opacity)
             else:
                 self.collision_handles[g] = server.scene.add_mesh_simple(
@@ -68,6 +83,14 @@ class MujocoViserRenderer:
     def set_collision_visible(self, visible: bool):
         for h in self.collision_handles.values():
             h.visible = visible
+
+    def remove(self):
+        """Remove this renderer's nodes before replacing its model."""
+        for handle in list(self.handles.values()) + list(self.collision_handles.values()) + self._scene_handles:
+            handle.remove()
+        self.handles.clear()
+        self.collision_handles.clear()
+        self._scene_handles.clear()
 
     def update(self, data: mujoco.MjData):
         with self.server.atomic():
