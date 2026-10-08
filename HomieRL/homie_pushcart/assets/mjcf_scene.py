@@ -132,9 +132,10 @@ def cart_body_xml(params: dict, derived: dict) -> ET.Element:
     return body
 
 
-def build_mjcf(with_cart: bool, output: Path | None = None) -> dict:
-    pose = load_initial_pose(INITIAL_POSE_YAML)
-    params = load_cart_params()
+def build_mjcf(with_cart: bool, output: Path | None = None, *, pose: dict | None = None, params: dict | None = None) -> dict:
+    """``pose`` / ``params`` default to the V3.2 files; a later version passes its own grasp and cart."""
+    pose = pose if pose is not None else load_initial_pose(INITIAL_POSE_YAML)
+    params = params if params is not None else load_cart_params()
     kin = Kinematics(load_meshes=False)
     derived = derive_cart_pose(params, pose, kin)
     kin.set_configuration(pose["robot"]["joint_pos"], pose["robot"]["base_pos"], pose["robot"]["base_quat_xyzw"])

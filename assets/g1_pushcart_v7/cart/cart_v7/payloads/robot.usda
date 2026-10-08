@@ -1,0 +1,223 @@
+#usda 1.0
+(
+    customLayerData = {
+        string creator = "URDF USD Converter v0.1.3"
+    }
+    defaultPrim = "xiaotuiche"
+    doc = """Generated from Composed Stage of root layer C:\\Users\\Administrator\\AppData\\Local\\Temp\\tmprkhevkbc\\xiaotuiche.usdc
+
+
+Generated from Composed Stage of root layer C:\\Users\\Administrator\\AppData\\Local\\Temp\\urdf_import_cart_v7_4z39pwdh\\usdex_cart_v7\\xiaotuiche.usdc
+
+
+Generated from Composed Stage of root layer C:\\Users\\Administrator\\AppData\\Local\\Temp\\urdf_import_cart_v7_4z39pwdh\\temp_cart_v7\\cart_v7.usd
+
+
+Generated from Composed Stage of root layer E:\\CJME_Push_car\\assets\\g1_pushcart_v7\\cart\\cart_v7\\payloads\\base.usd
+"""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+over "xiaotuiche" (
+    prepend apiSchemas = ["IsaacRobotAPI"]
+)
+{
+    custom rel isaac:physics:robotJoints
+    custom rel isaac:physics:robotLinks
+
+    over "Physics"
+    {
+        over "caster_0_swivel_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "caster_1_swivel_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "caster_2_swivel_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "caster_3_swivel_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "grasp_left_slide_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "grasp_right_slide_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "wheel_0_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "wheel_1_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "wheel_2_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "wheel_3_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "grasp_left_roll_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "grasp_left_tilt_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "grasp_left_yaw_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "grasp_right_roll_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "grasp_right_tilt_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+
+        over "grasp_right_yaw_joint" (
+            prepend apiSchemas = ["IsaacJointAPI"]
+        )
+        {
+        }
+    }
+
+    over "Geometry"
+    {
+        over "base_link" (
+            prepend apiSchemas = ["IsaacLinkAPI"]
+        )
+        {
+            over "caster_0_swivel" (
+                prepend apiSchemas = ["IsaacLinkAPI"]
+            )
+            {
+                over "wheel_0" (
+                    prepend apiSchemas = ["IsaacLinkAPI"]
+                )
+                {
+                }
+            }
+
+            over "caster_1_swivel" (
+                prepend apiSchemas = ["IsaacLinkAPI"]
+            )
+            {
+                over "wheel_1" (
+                    prepend apiSchemas = ["IsaacLinkAPI"]
+                )
+                {
+                }
+            }
+
+            over "caster_2_swivel" (
+                prepend apiSchemas = ["IsaacLinkAPI"]
+            )
+            {
+                over "wheel_2" (
+                    prepend apiSchemas = ["IsaacLinkAPI"]
+                )
+                {
+                }
+            }
+
+            over "caster_3_swivel" (
+                prepend apiSchemas = ["IsaacLinkAPI"]
+            )
+            {
+                over "wheel_3" (
+                    prepend apiSchemas = ["IsaacLinkAPI"]
+                )
+                {
+                }
+            }
+
+            over "grasp_left_slider" (
+                prepend apiSchemas = ["IsaacLinkAPI"]
+            )
+            {
+                over "grasp_left_roll_link" (
+                    prepend apiSchemas = ["IsaacLinkAPI"]
+                )
+                {
+                    over "grasp_left_tilt_link" (
+                        prepend apiSchemas = ["IsaacLinkAPI"]
+                    )
+                    {
+                        over "grasp_left_link" (
+                            prepend apiSchemas = ["IsaacLinkAPI"]
+                        )
+                        {
+                        }
+                    }
+                }
+            }
+
+            over "grasp_right_slider" (
+                prepend apiSchemas = ["IsaacLinkAPI"]
+            )
+            {
+                over "grasp_right_roll_link" (
+                    prepend apiSchemas = ["IsaacLinkAPI"]
+                )
+                {
+                    over "grasp_right_tilt_link" (
+                        prepend apiSchemas = ["IsaacLinkAPI"]
+                    )
+                    {
+                        over "grasp_right_link" (
+                            prepend apiSchemas = ["IsaacLinkAPI"]
+                        )
+                        {
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

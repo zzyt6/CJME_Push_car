@@ -1,0 +1,128 @@
+# V7 cart + grasp physics. Inherits every V3.2 cart field (homie_pushcart/config/cart_params.yaml) and adds the
+# Dex3 <-> handle grasp model and Coulomb wheel / swivel resistance. Lengths m, masses kg, forces N, torques N.m.
+# Ranges are sampled per environment at every reset. Values are engineering estimates from the sources listed in
+# docs/push_cart_v7.md (no Dex3-on-handle measurement exists yet); replace them with bench measurements when available.
+inherit: homie_pushcart/config/cart_params.yaml
+
+grasp:
+  # Each palm is welded (PhysX FixedJoint / MuJoCo weld) to a four-joint chain on the handle axis:
+  #   base_link --slide (prismatic, bar axis y)--> slider --roll (about y)--> roll_link --tilt (about cart x)-->
+  #   tilt_link --yaw (about cart z)--> grasp_<side>_link
+  # slide: friction only (no geometric stop on a straight tube) -> Coulomb joint friction, load dependent.
+  # roll / tilt / yaw: the square tube's faces and the palm hold them geometrically, backed by the position-servoed
+  # fingers -> elastic (pad + finger compliance) up to the finger capacity, where the drive saturates (PhysX implicit
+  # drive maxForce, MuJoCo actuator forcerange): the hand pivots and is pushed back when the load drops. Pivoting
+  # past *_break_rad loses the grip (task termination). Pull (-x) / lift (+z) stay rigid with capacity termination.
+  link_mass_kg: 0.05                 # each chain link; conditioning only (0.2 kg per hand vs a 12-37 kg cart)
+  slide_armature: 0.01               # kg
+  rotation_armature: 0.01            # kg m^2; keeps the stiff rotational springs stable at dt 5 ms (0.1 N.m at 10 rad/s^2)
+  slide_limit_out_m: 0.12            # outward travel: post inner face 0.245 - Dex3 half width 0.044 - grasp y 0.072
+  slide_limit_in_m: 0.05             # inward travel (the hands move together under a common lateral offset)
+  rotation_limit_rad: 0.6            # hard stop of roll / tilt / yaw; the task terminates earlier (*_break_rad)
+  # --- slide: elasto-plastic Coulomb friction, load dependent -------------------------------------------------
+  # Model (2026-10-07): reset-integrator / elasto-plastic friction (Haessig & Friedland 1991; Dupont et al. 2002):
+  # the slide is a spring to an anchor whose force is capped at the friction limit; past the limit the hand slides
+  # and the anchor follows it (plastic slip), below it the hand only deflects elastically. PhysX articulation joint
+  # friction was replaced: in the welded robot-cart scene the slide crept ~7 mm / 9 s even at a 2000 N friction
+  # limit (the closed loop through the palm weld moves the joint past it); the anchor spring holds it to 0.65 mm.
+  # Tangential stiffness of the pad contacts along the tube: elastomer shear modulus ~E/3 of the ~5e4 N/m normal
+  # pad stiffness (see rotation_stiffness_range), several finger / palm contacts in parallel -> 1e4..4e4 N/m
+  # (elastic travel at a 50 N limit: 1.3..5 mm).
+  slide_stiffness_range: [10000.0, 40000.0]
+  slide_damping_ratio: 0.7           # of critical, for slide_damping_mass_kg
+  slide_damping_mass_kg: 1.0         # chain links + the hand / forearm moving with the slide through the weld
+  # Normal load the closed fingers press on the tube, summed over contacts: Dex3-1 grip force 50 N (Unitree spec,
+  # peak) acting on both sides -> up to ~100 N; continuous holding taken as 50-100 %.
+  normal_force_range: [50.0, 100.0]
+  # Pad (silicone / rubber tactile skin) on painted steel tube, dry: 0.3 (smooth / dusty) .. 0.8 (clean rubber).
+  friction_coeff_range: [0.3, 0.8]
+  # slide limit = mu * (N + |F_normal_to_bar|) + slide_offset_n, rewritten every control step from the hand load:
+  # any load across the tube is carried by contact normal forces and raises the friction available along it.
+  # Unloaded: 10..75 N. The -5 N offset (2026-10-06, user decision) biases the grip weaker; floor slide_min_n.
+  load_dependent_friction: true
+  slide_offset_n: -5.0
+  slide_min_n: 5.0
+  dynamic_over_static: [0.8, 1.0]    # Coulomb dynamic / static: the limit while the anchor is moving (sliding)
+  initial_offset_m: 0.04             # common lateral grip offset along the bar, U[-x, x], both hands
+  # --- capacities: lower bounds from the hardware (2026-10-08) ---------------------------------------------------
+  # Finger-force estimates (2026-10-06): pull / lift 40-80 N (two fingers 15-35 N each + thumb / palm edge), roll
+  # 1.0-2.5 N.m (opposing finger contacts on the 11 mm half side), tilt / yaw 3-6 N.m (finger forces over 3.5-7 cm
+  # along the tube). The real robot does not lose the cart in normal pushing (user's hardware observation, stated as
+  # certain), so the real grip carries at least what normal pushing demands; the finger-only estimates do not
+  # (the closed hand is also held by the wrapped palm / tube geometry and the arm). With them, grip-loss
+  # terminations and the 60 % grasp_margin penalty taught V7 to avoid steering moments (hand yaw p99 ~4.5 N.m vs
+  # 14-16 N.m used by V6 in the same corners) and its heavy-load path error doubled.
+  # Demand of normal pushing (scripts/cross_plant_bench_v7.py, v7_strong plant = these stiffnesses, capacities not
+  # binding, V6 policy, composite course 0-25 kg, p99.9 per hand): pull 123 N, lift 47 N, roll 5.5 N.m,
+  # tilt 14.7 N.m, yaw 8.2 N.m. Ranges below sit above that demand; the terminations remain a safety net for
+  # abusive loads. Replace with bench-measured break-out values when available.
+  pull_capacity_range: [150.0, 250.0]
+  lift_capacity_range: [150.0, 250.0]
+  push_capacity_n: 200.0             # structural (palm); a safety bound, not a grip limit
+  roll_capacity_range: [8.0, 15.0]
+  moment_capacity_range: [20.0, 30.0]  # tilt (about cart x) and yaw (about cart z)
+  # Tilt / yaw stiffness: pad compliance ~1 mm under 50 N per contact (5e4 N/m) at +-4 cm along the tube
+  # -> ~160 N.m/rad; finger servos add compliance.
+  rotation_stiffness_range: [80.0, 300.0]
+  # Roll (about the tube axis): the same contacts act on a lever of half the tube side (11 mm), not 4 cm:
+  # 6 contacts x 5e4 N/m x 0.011^2 ~ 36 N.m/rad, softened further by the finger servos in series -> 15-60
+  # (elastic range = capacity / k = 1-9.5 deg). Until 2026-10-07 roll shared 80-300: a 0.5 deg gait wobble of the
+  # wrist then produced 1.7 N.m rms roll moment, 55-77 % of the internal-load penalty, which no policy can cancel.
+  roll_stiffness_range: [15.0, 60.0]
+  rotation_damping_ratio: 0.7        # of critical, with rotation_armature
+  # --- grip loss (episode termination) -------------------------------------------------------------------------
+  # The elastic range is capacity / stiffness = 0.3-1.8 deg; past it the hand is being levered off the tube.
+  # Geometric estimate of where contact is certainly gone: roll ~15 deg (finger contacts move ~3 mm across the 22 mm
+  # square's faces), tilt / yaw ~10 deg (far palm edge 7.6 mm off the tube). The thresholds are set looser
+  # (2026-10-06, user decision) so that a hand that is levered but not yet off the tube keeps the episode;
+  # grasp_margin / grasp_drift still penalise the approach.
+  roll_break_rad: 0.35               # 20 deg
+  tilt_break_rad: 0.26               # 15 deg (tilt and yaw)
+  # Sliding along the tube does not drop the cart, but past 8 cm from the initial grip the hand is near a post or
+  # the other hand and the arms are far from the trained grasp posture; without regrasping that is a failed grip.
+  # Measured on the plastic slip (anchor), not on the elastic deflection.
+  slide_drift_break_m: 0.08
+  # Over capacity for 0.4 s (V3.2's value): fingers opened. 0.1 s was tried (2026-10-07) and terminated on gait /
+  # impact peaks: with the training policy (d 0.55 / 0.76) 6.5 % / 14.3 % of episodes ended on pull peaks lasting
+  # 0.10-0.14 s (median 1.6-1.7 x capacity, the preceding 0.5 s at ~0.5 x); a 0.2 s window left 0 % / 0.2 %, 0.3-0.5 s
+  # none. Short peaks are absorbed by pad / finger compliance and still cost grasp_margin.
+  overload_persist_steps: 20
+  # --- geometry ------------------------------------------------------------------------------------------------
+  fit_clearance_m: 0.0005            # surface gap left by assets/grasp_fit.py when the fingers close on the tube
+
+wheels_v7:
+  # Rolling resistance as Coulomb wheel-joint friction (constant torque), replacing the purely viscous V3.2 drag.
+  # Caster manufacturers quote push force / load = 0.01-0.08 and a start (breakaway) force 1.5-3x the rolling one.
+  # Per wheel: tau = c_rr * (m_total g / 4) * r_wheel, with m_total the sampled total cart mass.
+  rolling_coeff_range: [0.01, 0.04]
+  breakaway_over_rolling: [1.5, 2.5]
+  wheel_viscous_range: [0.0, 0.005]  # N.m.s/rad, small residual bearing drag
+  # Swivel (king-pin) resistance: Coulomb torque on the swivel joint. The sphere wheel collider has a point contact
+  # and therefore no tyre scrub torque; this joint torque stands in for scrub + bearing friction at rest.
+  swivel_friction_range: [0.05, 0.4]
+  # Rolling-dependent scrub (2026-10-08). The 0.05-0.4 N.m above is the tyre's bore (scrub) torque of a caster
+  # swivelled at standstill. A rolling tyre's bore / parking moment collapses once the contact patch is renewed by
+  # rolling (Pacejka, Tire and Vehicle Dynamics, 3rd ed. 2012, turn slip / parking moment), so while the wheel rolls
+  # only the swivel bearing friction remains:
+  #   tau_swivel = bearing + (scrub - bearing) * exp(-|wheel rim speed| / swivel_scrub_speed_m_s)
+  # Applied as a constant Coulomb torque at every speed (V7 until 2026-10-08), the scrub left every caster stuck in a
+  # dead band carrying a side force tau / trail (7.5 N at 0.225 N.m, 3 cm trail): a steady 0.4 rad/s turn of the
+  # bare cart needed 13.6 N.m in MuJoCo (stiff friction) vs 0.4 N.m in PhysX (its joint friction relaxes in steady
+  # motion) and 1.2 N.m with the V3.2 casters -- the MuJoCo V7 plant could not be steered within the hands' yaw
+  # capacity (scripts/caster_steer_test.py).
+  # Bearing: ball race, mu 0.0015-0.005 x axial load 30-90 N x race radius ~0.025 m -> 0.001-0.01 N.m; seals / dirt
+  # of cheap casters up to ~0.02 (V3.2 used 0.01). Decay speed: the patch (~1-2 cm) is renewed within ~0.1-0.3 s at
+  # 0.05 m/s; estimate, replace with a measured swivel-torque vs speed curve.
+  swivel_bearing_range: [0.002, 0.02]
+  swivel_scrub_speed_m_s: 0.05
+  swivel_viscous_range: [0.0, 0.05]
+  wheel_friction_range: [0.5, 1.0]   # tyre on floor (PU / rubber on concrete / tile)
+  base_mass_scale_range: [0.9, 1.1]  # true cart base mass vs the nominal 12 kg the policy is told (weighing error)
+
+handle_v7:
+  # The real handle is a square steel tube (2026-10-06). Side chosen by assets/grasp_fit.sweep_square: of the
+  # commercial sizes 16/19/20/22/25 mm, 22 mm needs the least change of the planned finger angles (six links in
+  # contact for every size). Faces along the cart x / z axes. Hand <-> handle contact stays disabled: the joint
+  # chain is the contact model (a collider on top would add unmodelled friction and fight the joints).
+  profile: square
+  side: 0.022

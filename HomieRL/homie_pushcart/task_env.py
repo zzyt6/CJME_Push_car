@@ -59,11 +59,11 @@ def wrap_angle(a: torch.Tensor) -> torch.Tensor:
 class PushCartEnv(PushCartSimEnv):
     def __init__(self, cfg, task_cfg: PushCartTaskCfg, project_root: Path = ROOT, device="cuda:0", headless=True, *,
                  checkpoint: Path | None = None, sim_context=None, level: int | None = None, cart_params=None,
-                 allow_robot_cart_contact=False):
+                 allow_robot_cart_contact=False, pose=None):
         self.task_cfg = task_cfg
         configure_homie_cfg(cfg, task_cfg)
         super().__init__(cfg, project_root, device, headless, with_cart=True, sim_context=sim_context,
-                         cart_params=cart_params, allow_robot_cart_contact=allow_robot_cart_contact)
+                         cart_params=cart_params, allow_robot_cart_contact=allow_robot_cart_contact, pose=pose)
         self.policy = HimLowLevelPolicy(Path(checkpoint) if checkpoint else frozen_checkpoint(), device)
         self.curriculum = CurriculumTracker(task_cfg, level)
         self.num_hl_actions = task_cfg.env.num_hl_actions

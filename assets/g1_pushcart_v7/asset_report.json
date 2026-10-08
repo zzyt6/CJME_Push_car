@@ -1,0 +1,278 @@
+{
+  "output": "E:\\CJME_Push_car\\assets\\g1_pushcart_v7\\g1_pushcart_v7.usd",
+  "robot_usd": "E:\\CJME_Push_car\\assets\\g1_pushcart_v7\\g1_grasp\\g1_grasp_v7\\g1_grasp_v7.usda",
+  "cart_usd": "E:\\CJME_Push_car\\assets\\g1_pushcart_v7\\cart\\cart_v7\\cart_v7.usda",
+  "robot_joint_order_usd": [
+    "left_hip_pitch_joint",
+    "right_hip_pitch_joint",
+    "waist_yaw_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "left_shoulder_pitch_joint",
+    "right_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "robot_joint_set_matches_homie": true,
+  "robot_joint_count": 27,
+  "robot_joint_limits_max_abs_error_rad": 9.455429150762029e-08,
+  "robot_link_masses_kg": {
+    "pelvis": 3.812999963760376,
+    "left_hip_pitch_link": 1.350000023841858,
+    "left_hip_roll_link": 1.5199999809265137,
+    "left_hip_yaw_link": 1.7020000219345093,
+    "left_knee_link": 1.9320000410079956,
+    "left_ankle_pitch_link": 0.07400000095367432,
+    "left_ankle_roll_link": 0.6079999804496765,
+    "right_hip_pitch_link": 1.350000023841858,
+    "right_hip_roll_link": 1.5199999809265137,
+    "right_hip_yaw_link": 1.7020000219345093,
+    "right_knee_link": 1.9320000410079956,
+    "right_ankle_pitch_link": 0.07400000095367432,
+    "right_ankle_roll_link": 0.6079999804496765,
+    "waist_yaw_link": 0.21400000154972076,
+    "waist_roll_link": 0.0860000029206276,
+    "torso_link": 6.78000020980835,
+    "left_shoulder_pitch_link": 0.7179999947547913,
+    "left_shoulder_roll_link": 0.6430000066757202,
+    "left_shoulder_yaw_link": 0.734000027179718,
+    "left_elbow_link": 0.6000000238418579,
+    "left_wrist_roll_link": 0.08544497936964035,
+    "left_wrist_pitch_link": 0.48404955863952637,
+    "left_wrist_yaw_link": 0.08457647264003754,
+    "left_hand_palm_link": 0.3728385269641876,
+    "left_hand_thumb_0_link": 0.08623656630516052,
+    "left_hand_thumb_1_link": 0.05885069817304611,
+    "left_hand_thumb_2_link": 0.020306259393692017,
+    "left_hand_middle_0_link": 0.05885069817304611,
+    "left_hand_middle_1_link": 0.020306259393692017,
+    "left_hand_index_0_link": 0.05885069817304611,
+    "left_hand_index_1_link": 0.020306259393692017,
+    "right_shoulder_pitch_link": 0.7179999947547913,
+    "right_shoulder_roll_link": 0.6430000066757202,
+    "right_shoulder_yaw_link": 0.734000027179718,
+    "right_elbow_link": 0.6000000238418579,
+    "right_wrist_roll_link": 0.08544497936964035,
+    "right_wrist_pitch_link": 0.48404955863952637,
+    "right_wrist_yaw_link": 0.08457647264003754,
+    "right_hand_palm_link": 0.3728385269641876,
+    "right_hand_thumb_0_link": 0.08623656630516052,
+    "right_hand_thumb_1_link": 0.05885069817304611,
+    "right_hand_thumb_2_link": 0.020306259393692017,
+    "right_hand_middle_0_link": 0.05885069817304611,
+    "right_hand_middle_1_link": 0.020306259393692017,
+    "right_hand_index_0_link": 0.05885069817304611,
+    "right_hand_index_1_link": 0.020306259393692017,
+    "logo_link": 0.0010000000474974513,
+    "head_link": 1.0360000133514404,
+    "pelvis_contour_link": 0.0010000000474974513
+  },
+  "robot_total_mass_kg": 34.39423434785567,
+  "cart_model": "caster",
+  "cart_joints": [
+    "caster_0_swivel_joint",
+    "caster_1_swivel_joint",
+    "caster_2_swivel_joint",
+    "caster_3_swivel_joint",
+    "grasp_left_slide_joint",
+    "grasp_right_slide_joint",
+    "wheel_0_joint",
+    "wheel_1_joint",
+    "wheel_2_joint",
+    "wheel_3_joint",
+    "grasp_left_roll_joint",
+    "grasp_left_tilt_joint",
+    "grasp_left_yaw_joint",
+    "grasp_right_roll_joint",
+    "grasp_right_tilt_joint",
+    "grasp_right_yaw_joint"
+  ],
+  "cart_joint_damping": {
+    "caster_0_swivel_joint": 0.05000000074505806,
+    "caster_1_swivel_joint": 0.05000000074505806,
+    "caster_2_swivel_joint": 0.05000000074505806,
+    "caster_3_swivel_joint": 0.05000000074505806,
+    "grasp_left_slide_joint": null,
+    "grasp_right_slide_joint": null,
+    "wheel_0_joint": 0.004999999888241291,
+    "wheel_1_joint": 0.004999999888241291,
+    "wheel_2_joint": 0.004999999888241291,
+    "wheel_3_joint": 0.004999999888241291,
+    "grasp_left_roll_joint": 0.0,
+    "grasp_left_tilt_joint": 0.0,
+    "grasp_left_yaw_joint": 0.0,
+    "grasp_right_roll_joint": 0.0,
+    "grasp_right_tilt_joint": 0.0,
+    "grasp_right_yaw_joint": 0.0
+  },
+  "cart_collision_materials": {
+    "wheel_0_1": {
+      "material": "/Scene/Cart/PhysicsMaterials/wheel",
+      "static_friction": 0.800000011920929,
+      "dynamic_friction": 0.800000011920929,
+      "restitution": 0.0
+    },
+    "wheel_1_1": {
+      "material": "/Scene/Cart/PhysicsMaterials/wheel",
+      "static_friction": 0.800000011920929,
+      "dynamic_friction": 0.800000011920929,
+      "restitution": 0.0
+    },
+    "wheel_2_1": {
+      "material": "/Scene/Cart/PhysicsMaterials/wheel",
+      "static_friction": 0.800000011920929,
+      "dynamic_friction": 0.800000011920929,
+      "restitution": 0.0
+    },
+    "wheel_3_1": {
+      "material": "/Scene/Cart/PhysicsMaterials/wheel",
+      "static_friction": 0.800000011920929,
+      "dynamic_friction": 0.800000011920929,
+      "restitution": 0.0
+    },
+    "deck": {
+      "material": "/Scene/Cart/PhysicsMaterials/body",
+      "static_friction": 0.6000000238418579,
+      "dynamic_friction": 0.6000000238418579,
+      "restitution": 0.0
+    },
+    "post_00": {
+      "material": "/Scene/Cart/PhysicsMaterials/body",
+      "static_friction": 0.6000000238418579,
+      "dynamic_friction": 0.6000000238418579,
+      "restitution": 0.0
+    },
+    "post_01": {
+      "material": "/Scene/Cart/PhysicsMaterials/body",
+      "static_friction": 0.6000000238418579,
+      "dynamic_friction": 0.6000000238418579,
+      "restitution": 0.0
+    },
+    "post_10": {
+      "material": "/Scene/Cart/PhysicsMaterials/body",
+      "static_friction": 0.6000000238418579,
+      "dynamic_friction": 0.6000000238418579,
+      "restitution": 0.0
+    },
+    "post_11": {
+      "material": "/Scene/Cart/PhysicsMaterials/body",
+      "static_friction": 0.6000000238418579,
+      "dynamic_friction": 0.6000000238418579,
+      "restitution": 0.0
+    },
+    "shelf_0": {
+      "material": "/Scene/Cart/PhysicsMaterials/body",
+      "static_friction": 0.6000000238418579,
+      "dynamic_friction": 0.6000000238418579,
+      "restitution": 0.0
+    },
+    "shelf_1": {
+      "material": "/Scene/Cart/PhysicsMaterials/body",
+      "static_friction": 0.6000000238418579,
+      "dynamic_friction": 0.6000000238418579,
+      "restitution": 0.0
+    }
+  },
+  "cart_link_masses_kg": {
+    "base_link": 12.0,
+    "caster_0_swivel": 0.20000000298023224,
+    "wheel_0": 0.4000000059604645,
+    "caster_1_swivel": 0.20000000298023224,
+    "wheel_1": 0.4000000059604645,
+    "caster_2_swivel": 0.20000000298023224,
+    "wheel_2": 0.4000000059604645,
+    "caster_3_swivel": 0.20000000298023224,
+    "wheel_3": 0.4000000059604645,
+    "grasp_left_slider": 0.05000000074505806,
+    "grasp_left_roll_link": 0.05000000074505806,
+    "grasp_left_tilt_link": 0.05000000074505806,
+    "grasp_left_link": 0.05000000074505806,
+    "grasp_right_slider": 0.05000000074505806,
+    "grasp_right_roll_link": 0.05000000074505806,
+    "grasp_right_tilt_link": 0.05000000074505806,
+    "grasp_right_link": 0.05000000074505806
+  },
+  "pelvis_world": [
+    0.0,
+    0.0,
+    0.759214
+  ],
+  "cart_base_world": [
+    0.8077069274708014,
+    4.999999997604421e-06,
+    0.0
+  ],
+  "cart_base_yaw": -4.884981308350689e-15,
+  "handle_height": 0.9131348544445627,
+  "grasp_joints": {
+    "left": {
+      "palm_prim": "/Scene/Robot/Geometry/pelvis/waist_yaw_link/waist_roll_link/torso_link/left_shoulder_pitch_link/left_shoulder_roll_link/left_shoulder_yaw_link/left_elbow_link/left_wrist_roll_link/left_wrist_pitch_link/left_wrist_yaw_link/left_hand_palm_link",
+      "cart_prim": "/Scene/Cart/Geometry/base_link/grasp_left_slider/grasp_left_roll_link/grasp_left_tilt_link/grasp_left_link",
+      "local_pos0_palm": [
+        0.05894506841007444,
+        -0.03404015867170462,
+        -0.0003957129990675489
+      ],
+      "local_pos1_cart": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "grasp_point_world": [
+        0.3177069274708018,
+        0.0716950005452952,
+        0.9131349407170115
+      ]
+    },
+    "right": {
+      "palm_prim": "/Scene/Robot/Geometry/pelvis/waist_yaw_link/waist_roll_link/torso_link/right_shoulder_pitch_link/right_shoulder_roll_link/right_shoulder_yaw_link/right_elbow_link/right_wrist_roll_link/right_wrist_pitch_link/right_wrist_yaw_link/right_hand_palm_link",
+      "cart_prim": "/Scene/Cart/Geometry/base_link/grasp_right_slider/grasp_right_roll_link/grasp_right_tilt_link/grasp_right_link",
+      "local_pos0_palm": [
+        0.058945087214612224,
+        0.03404032937202237,
+        -0.000395729718295753
+      ],
+      "local_pos1_cart": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "grasp_point_world": [
+        0.3177069274708011,
+        -0.07168500054529521,
+        0.9131347681721138
+      ]
+    }
+  },
+  "static_checks": {
+    "left": {
+      "position_error_m": 2.655073049205453e-08,
+      "rotation_error_deg": 1.472131158591555e-05,
+      "grasp_frame_mismatch_m": 3.306728163296089e-08
+    },
+    "right": {
+      "position_error_m": 2.6550730471455296e-08,
+      "rotation_error_deg": 1.472131158591555e-05,
+      "grasp_frame_mismatch_m": 3.365220314259583e-08
+    }
+  },
+  "robot_cart_collisions_filtered": true
+}

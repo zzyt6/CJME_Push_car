@@ -1,0 +1,628 @@
+#usda 1.0
+(
+    customLayerData = {
+        string creator = "URDF USD Converter v0.1.3"
+    }
+    defaultPrim = "xiaotuiche"
+    doc = """Generated from Composed Stage of root layer C:\\Users\\Administrator\\AppData\\Local\\Temp\\tmprkhevkbc\\xiaotuiche.usdc
+
+
+Generated from Composed Stage of root layer C:\\Users\\Administrator\\AppData\\Local\\Temp\\urdf_import_cart_v7_4z39pwdh\\usdex_cart_v7\\xiaotuiche.usdc
+
+
+Generated from Composed Stage of root layer C:\\Users\\Administrator\\AppData\\Local\\Temp\\urdf_import_cart_v7_4z39pwdh\\temp_cart_v7\\cart_v7.usd
+
+
+Generated from Composed Stage of root layer E:\\CJME_Push_car\\assets\\g1_pushcart_v7\\cart\\cart_v7\\payloads\\base.usd
+"""
+    kilogramsPerUnit = 1
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+over "xiaotuiche"
+{
+    over "Geometry"
+    {
+        over "base_link" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsArticulationRootAPI", "NewtonArticulationRootAPI", "PhysicsMassAPI"]
+        )
+        {
+            bool newton:selfCollisionEnabled = 0
+            point3f physics:centerOfMass = (0, 0, 0.3)
+            float3 physics:diagonalInertia = (0.6516, 1.2916, 1.36)
+            float physics:mass = 12
+            quatf physics:principalAxes = (-0.70710677, 0.70710677, 0, 0)
+
+            over "caster_0_swivel" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            )
+            {
+                point3f physics:centerOfMass = (0, 0, 0)
+                float3 physics:diagonalInertia = (0.0000533333, 0.0000533333, 0.0000533333)
+                float physics:mass = 0.2
+                quatf physics:principalAxes = (1, 0, 0, 0)
+
+                over "wheel_0" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                )
+                {
+                    point3f physics:centerOfMass = (0, 0, 0)
+                    float3 physics:diagonalInertia = (0.00039, 0.00039, 0.00072)
+                    float physics:mass = 0.4
+                    quatf physics:principalAxes = (0.70710677, 0.70710677, 0, 0)
+
+                    over "wheel_0_1" (
+                        prepend apiSchemas = ["NewtonCollisionAPI"]
+                    )
+                    {
+                    }
+                }
+            }
+
+            over "caster_1_swivel" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            )
+            {
+                point3f physics:centerOfMass = (0, 0, 0)
+                float3 physics:diagonalInertia = (0.0000533333, 0.0000533333, 0.0000533333)
+                float physics:mass = 0.2
+                quatf physics:principalAxes = (1, 0, 0, 0)
+
+                over "wheel_1" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                )
+                {
+                    point3f physics:centerOfMass = (0, 0, 0)
+                    float3 physics:diagonalInertia = (0.00039, 0.00039, 0.00072)
+                    float physics:mass = 0.4
+                    quatf physics:principalAxes = (0.70710677, 0.70710677, 0, 0)
+
+                    over "wheel_1_1" (
+                        prepend apiSchemas = ["NewtonCollisionAPI"]
+                    )
+                    {
+                    }
+                }
+            }
+
+            over "caster_2_swivel" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            )
+            {
+                point3f physics:centerOfMass = (0, 0, 0)
+                float3 physics:diagonalInertia = (0.0000533333, 0.0000533333, 0.0000533333)
+                float physics:mass = 0.2
+                quatf physics:principalAxes = (1, 0, 0, 0)
+
+                over "wheel_2" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                )
+                {
+                    point3f physics:centerOfMass = (0, 0, 0)
+                    float3 physics:diagonalInertia = (0.00039, 0.00039, 0.00072)
+                    float physics:mass = 0.4
+                    quatf physics:principalAxes = (0.70710677, 0.70710677, 0, 0)
+
+                    over "wheel_2_1" (
+                        prepend apiSchemas = ["NewtonCollisionAPI"]
+                    )
+                    {
+                    }
+                }
+            }
+
+            over "caster_3_swivel" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            )
+            {
+                point3f physics:centerOfMass = (0, 0, 0)
+                float3 physics:diagonalInertia = (0.0000533333, 0.0000533333, 0.0000533333)
+                float physics:mass = 0.2
+                quatf physics:principalAxes = (1, 0, 0, 0)
+
+                over "wheel_3" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                )
+                {
+                    point3f physics:centerOfMass = (0, 0, 0)
+                    float3 physics:diagonalInertia = (0.00039, 0.00039, 0.00072)
+                    float physics:mass = 0.4
+                    quatf physics:principalAxes = (0.70710677, 0.70710677, 0, 0)
+
+                    over "wheel_3_1" (
+                        prepend apiSchemas = ["NewtonCollisionAPI"]
+                    )
+                    {
+                    }
+                }
+            }
+
+            over "deck" (
+                prepend apiSchemas = ["NewtonCollisionAPI"]
+            )
+            {
+            }
+
+            over "post_00" (
+                prepend apiSchemas = ["NewtonCollisionAPI"]
+            )
+            {
+            }
+
+            over "post_01" (
+                prepend apiSchemas = ["NewtonCollisionAPI"]
+            )
+            {
+            }
+
+            over "post_10" (
+                prepend apiSchemas = ["NewtonCollisionAPI"]
+            )
+            {
+            }
+
+            over "post_11" (
+                prepend apiSchemas = ["NewtonCollisionAPI"]
+            )
+            {
+            }
+
+            over "shelf_0" (
+                prepend apiSchemas = ["NewtonCollisionAPI"]
+            )
+            {
+            }
+
+            over "shelf_1" (
+                prepend apiSchemas = ["NewtonCollisionAPI"]
+            )
+            {
+            }
+
+            over "grasp_left_slider" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            )
+            {
+                point3f physics:centerOfMass = (0, 0, 0)
+                float3 physics:diagonalInertia = (0.0000075, 0.0000075, 0.0000075)
+                float physics:mass = 0.05
+                quatf physics:principalAxes = (1, 0, 0, 0)
+
+                over "grasp_left_roll_link" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                )
+                {
+                    point3f physics:centerOfMass = (0, 0, 0)
+                    float3 physics:diagonalInertia = (0.0000075, 0.0000075, 0.0000075)
+                    float physics:mass = 0.05
+                    quatf physics:principalAxes = (1, 0, 0, 0)
+
+                    over "grasp_left_tilt_link" (
+                        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                    )
+                    {
+                        point3f physics:centerOfMass = (0, 0, 0)
+                        float3 physics:diagonalInertia = (0.0000075, 0.0000075, 0.0000075)
+                        float physics:mass = 0.05
+                        quatf physics:principalAxes = (1, 0, 0, 0)
+
+                        over "grasp_left_link" (
+                            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                        )
+                        {
+                            point3f physics:centerOfMass = (0, 0, 0)
+                            float3 physics:diagonalInertia = (0.0000075, 0.0000075, 0.0000075)
+                            float physics:mass = 0.05
+                            quatf physics:principalAxes = (1, 0, 0, 0)
+                        }
+                    }
+                }
+            }
+
+            over "grasp_right_slider" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            )
+            {
+                point3f physics:centerOfMass = (0, 0, 0)
+                float3 physics:diagonalInertia = (0.0000075, 0.0000075, 0.0000075)
+                float physics:mass = 0.05
+                quatf physics:principalAxes = (1, 0, 0, 0)
+
+                over "grasp_right_roll_link" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                )
+                {
+                    point3f physics:centerOfMass = (0, 0, 0)
+                    float3 physics:diagonalInertia = (0.0000075, 0.0000075, 0.0000075)
+                    float physics:mass = 0.05
+                    quatf physics:principalAxes = (1, 0, 0, 0)
+
+                    over "grasp_right_tilt_link" (
+                        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                    )
+                    {
+                        point3f physics:centerOfMass = (0, 0, 0)
+                        float3 physics:diagonalInertia = (0.0000075, 0.0000075, 0.0000075)
+                        float physics:mass = 0.05
+                        quatf physics:principalAxes = (1, 0, 0, 0)
+
+                        over "grasp_right_link" (
+                            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                        )
+                        {
+                            point3f physics:centerOfMass = (0, 0, 0)
+                            float3 physics:diagonalInertia = (0.0000075, 0.0000075, 0.0000075)
+                            float physics:mass = 0.05
+                            quatf physics:principalAxes = (1, 0, 0, 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    over "Physics"
+    {
+        def PhysicsRevoluteJoint "caster_0_swivel_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.05
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Z"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/caster_0_swivel>
+            point3f physics:localPos0 = (-0.5, -0.25, 0.08)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            custom float urdf:dynamics:damping = 0.05
+            custom float urdf:dynamics:friction = 0
+        }
+
+        def PhysicsRevoluteJoint "wheel_0_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.005
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Y"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/caster_0_swivel>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/caster_0_swivel/wheel_0>
+            point3f physics:localPos0 = (-0.03, 0, -0.02)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            custom float urdf:dynamics:damping = 0.005
+            custom float urdf:dynamics:friction = 0
+        }
+
+        def PhysicsRevoluteJoint "caster_1_swivel_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.05
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Z"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/caster_1_swivel>
+            point3f physics:localPos0 = (-0.5, 0.25, 0.08)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            custom float urdf:dynamics:damping = 0.05
+            custom float urdf:dynamics:friction = 0
+        }
+
+        def PhysicsRevoluteJoint "wheel_1_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.005
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Y"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/caster_1_swivel>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/caster_1_swivel/wheel_1>
+            point3f physics:localPos0 = (-0.03, 0, -0.02)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            custom float urdf:dynamics:damping = 0.005
+            custom float urdf:dynamics:friction = 0
+        }
+
+        def PhysicsRevoluteJoint "caster_2_swivel_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.05
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Z"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/caster_2_swivel>
+            point3f physics:localPos0 = (0.5, -0.25, 0.08)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            custom float urdf:dynamics:damping = 0.05
+            custom float urdf:dynamics:friction = 0
+        }
+
+        def PhysicsRevoluteJoint "wheel_2_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.005
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Y"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/caster_2_swivel>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/caster_2_swivel/wheel_2>
+            point3f physics:localPos0 = (-0.03, 0, -0.02)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            custom float urdf:dynamics:damping = 0.005
+            custom float urdf:dynamics:friction = 0
+        }
+
+        def PhysicsRevoluteJoint "caster_3_swivel_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.05
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Z"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/caster_3_swivel>
+            point3f physics:localPos0 = (0.5, 0.25, 0.08)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            custom float urdf:dynamics:damping = 0.05
+            custom float urdf:dynamics:friction = 0
+        }
+
+        def PhysicsRevoluteJoint "wheel_3_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.005
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Y"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/caster_3_swivel>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/caster_3_swivel/wheel_3>
+            point3f physics:localPos0 = (-0.03, 0, -0.02)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            custom float urdf:dynamics:damping = 0.005
+            custom float urdf:dynamics:friction = 0
+        }
+
+        def PhysicsPrismaticJoint "grasp_left_slide_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear", "PhysicsJointStateAPI:linear"]
+        )
+        {
+            float drive:linear:physics:damping = 0
+            float drive:linear:physics:maxForce = 1000
+            float drive:linear:physics:stiffness = 0
+            uniform token drive:linear:physics:type = "force"
+            uniform token physics:axis = "Y"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/grasp_left_slider>
+            point3f physics:localPos0 = (-0.49, 0.07169, 0.91313493)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -0.05
+            float physics:upperLimit = 0.12
+            custom float urdf:dynamics:damping = 0
+            custom float urdf:dynamics:friction = 0
+            custom float urdf:limit:effort = 1000
+            custom float urdf:limit:velocity = 5
+        }
+
+        def PhysicsRevoluteJoint "grasp_left_roll_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0
+            float drive:angular:physics:maxForce = 1000
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Y"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/grasp_left_slider>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/grasp_left_slider/grasp_left_roll_link>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -34.37747
+            float physics:upperLimit = 34.37747
+            custom float urdf:dynamics:damping = 0
+            custom float urdf:dynamics:friction = 0
+            custom float urdf:limit:effort = 1000
+            custom float urdf:limit:velocity = 50
+        }
+
+        def PhysicsRevoluteJoint "grasp_left_tilt_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0
+            float drive:angular:physics:maxForce = 1000
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "X"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/grasp_left_slider/grasp_left_roll_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/grasp_left_slider/grasp_left_roll_link/grasp_left_tilt_link>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -34.37747
+            float physics:upperLimit = 34.37747
+            custom float urdf:dynamics:damping = 0
+            custom float urdf:dynamics:friction = 0
+            custom float urdf:limit:effort = 1000
+            custom float urdf:limit:velocity = 50
+        }
+
+        def PhysicsRevoluteJoint "grasp_left_yaw_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0
+            float drive:angular:physics:maxForce = 1000
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Z"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/grasp_left_slider/grasp_left_roll_link/grasp_left_tilt_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/grasp_left_slider/grasp_left_roll_link/grasp_left_tilt_link/grasp_left_link>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -34.37747
+            float physics:upperLimit = 34.37747
+            custom float urdf:dynamics:damping = 0
+            custom float urdf:dynamics:friction = 0
+            custom float urdf:limit:effort = 1000
+            custom float urdf:limit:velocity = 50
+        }
+
+        def PhysicsPrismaticJoint "grasp_right_slide_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear", "PhysicsJointStateAPI:linear"]
+        )
+        {
+            float drive:linear:physics:damping = 0
+            float drive:linear:physics:maxForce = 1000
+            float drive:linear:physics:stiffness = 0
+            uniform token drive:linear:physics:type = "force"
+            uniform token physics:axis = "Y"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/grasp_right_slider>
+            point3f physics:localPos0 = (-0.49, -0.07169, 0.91313475)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -0.12
+            float physics:upperLimit = 0.05
+            custom float urdf:dynamics:damping = 0
+            custom float urdf:dynamics:friction = 0
+            custom float urdf:limit:effort = 1000
+            custom float urdf:limit:velocity = 5
+        }
+
+        def PhysicsRevoluteJoint "grasp_right_roll_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0
+            float drive:angular:physics:maxForce = 1000
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Y"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/grasp_right_slider>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/grasp_right_slider/grasp_right_roll_link>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -34.37747
+            float physics:upperLimit = 34.37747
+            custom float urdf:dynamics:damping = 0
+            custom float urdf:dynamics:friction = 0
+            custom float urdf:limit:effort = 1000
+            custom float urdf:limit:velocity = 50
+        }
+
+        def PhysicsRevoluteJoint "grasp_right_tilt_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0
+            float drive:angular:physics:maxForce = 1000
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "X"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/grasp_right_slider/grasp_right_roll_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/grasp_right_slider/grasp_right_roll_link/grasp_right_tilt_link>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -34.37747
+            float physics:upperLimit = 34.37747
+            custom float urdf:dynamics:damping = 0
+            custom float urdf:dynamics:friction = 0
+            custom float urdf:limit:effort = 1000
+            custom float urdf:limit:velocity = 50
+        }
+
+        def PhysicsRevoluteJoint "grasp_right_yaw_joint" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular", "PhysicsJointStateAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0
+            float drive:angular:physics:maxForce = 1000
+            float drive:angular:physics:stiffness = 0
+            uniform token drive:angular:physics:type = "force"
+            uniform token physics:axis = "Z"
+            custom rel physics:body0
+            prepend rel physics:body0 = </xiaotuiche/Geometry/base_link/grasp_right_slider/grasp_right_roll_link/grasp_right_tilt_link>
+            custom rel physics:body1
+            prepend rel physics:body1 = </xiaotuiche/Geometry/base_link/grasp_right_slider/grasp_right_roll_link/grasp_right_tilt_link/grasp_right_link>
+            point3f physics:localPos0 = (0, 0, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (1, 0, 0, 0)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -34.37747
+            float physics:upperLimit = 34.37747
+            custom float urdf:dynamics:damping = 0
+            custom float urdf:dynamics:friction = 0
+            custom float urdf:limit:effort = 1000
+            custom float urdf:limit:velocity = 50
+        }
+    }
+}
+

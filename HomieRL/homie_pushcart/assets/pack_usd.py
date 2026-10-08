@@ -84,20 +84,27 @@ def find_prim_named(stage, root_path: str, name: str):
     raise KeyError(f"{name} not found under {root_path}")
 
 
-def pack(output: Path = PACKED_USD) -> dict:
+def pack(output: Path = PACKED_USD, *, asset_dir: Path = ASSET_DIR, cart_urdf: Path = CART_URDF,
+         report_path: Path = ASSET_REPORT, params: dict | None = None, grasp_target=None,
+         robot_urdf: Path = G1_GRASP_URDF, pose: dict | None = None) -> dict:
+    """Pack robot + cart + grasp joints. The keyword arguments let a later version pack its own cart.
+
+    ``grasp_target(stage, side, cart_T, gp_world, palm_T)`` may return ``(prim, local_pos1, local_rot1)`` to attach
+    the palm joint to a cart link other than ``base_link``; by default the V3.2 palm <-> base_link joint is built.
+    """
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
-    ASSET_DIR.mkdir(parents=True, exist_ok=True)
-    pose = load_initial_pose()
-    params = load_cart_params()
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    pose = pose if pose is not None else load_initial_pose()
+    params = params if params is not None else load_cart_params()
     kin = Kinematics(load_meshes=False)
     derived = derive_cart_pose(params, pose, kin)
     kin.set_configuration(pose["robot"]["joint_pos"], pose["robot"]["base_pos"], pose["robot"]["base_quat_xyzw"])
 
-    robot_usd = convert_urdf(G1_GRASP_URDF, ASSET_DIR / "g1_grasp")
-    cart_usd = convert_urdf(CART_URDF, ASSET_DIR / "cart")
-    urdf_root = ET.parse(G1_GRASP_URDF).getroot()
-    cart_root = ET.parse(CART_URDF).getroot()
+    robot_usd = convert_urdf(robot_urdf, asset_dir / "g1_grasp")
+    cart_usd = convert_urdf(cart_urdf, asset_dir / "cart")
+    urdf_root = ET.parse(robot_urdf).getroot()
+    cart_root = ET.parse(cart_urdf).getroot()
 
     if output.exists():
         output.unlink()
@@ -169,15 +176,18 @@ def pack(output: Path = PACKED_USD) -> dict:
         cart_inv = np.linalg.inv(cart_T)
         gp_cart = (cart_inv @ np.append(gp_world, 1.0))[:3]
         rot1 = cart_inv[:3, :3] @ palm_T[:3, :3]
+        body1_prim = cart_base_prim
+        if grasp_target is not None:
+            body1_prim, gp_cart, rot1 = grasp_target(stage, side, cart_T, gp_world, palm_T)
         joint = UsdPhysics.FixedJoint.Define(stage, f"/Scene/GraspJoints/{side}")
         joint.CreateBody0Rel().SetTargets([Sdf.Path(palm_path)])
-        joint.CreateBody1Rel().SetTargets([cart_base_prim.GetPath()])
+        joint.CreateBody1Rel().SetTargets([body1_prim.GetPath()])
         joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*gp_palm.tolist()))
         joint.CreateLocalRot0Attr().Set(Gf.Quatf(1., 0., 0., 0.))
-        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(*gp_cart.tolist()))
+        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(*[float(v) for v in gp_cart]))
         joint.CreateLocalRot1Attr().Set(_quatf(rot1))
         joint.CreateExcludeFromArticulationAttr().Set(True)
-        grasp_report[side] = {"palm_prim": palm_path, "cart_prim": str(cart_base_prim.GetPath()),
+        grasp_report[side] = {"palm_prim": palm_path, "cart_prim": str(body1_prim.GetPath()),
                               "local_pos0_palm": gp_palm.tolist(), "local_pos1_cart": gp_cart.tolist(),
                               "grasp_point_world": gp_world.tolist()}
     del joints_scope
@@ -300,7 +310,7 @@ def pack(output: Path = PACKED_USD) -> dict:
         "robot_cart_collisions_filtered": [str(p) for p in UsdPhysics.FilteredPairsAPI(
             stage.GetPrimAtPath("/Scene/Cart")).GetFilteredPairsRel().GetTargets()] == ["/Scene/Robot"],
     }
-    ASSET_REPORT.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
 

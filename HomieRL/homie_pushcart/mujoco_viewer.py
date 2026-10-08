@@ -35,7 +35,8 @@ from .task_config import run_config_path, task_cfg_from_run
 from .teleop import CommandMapper
 
 HL_LOG_DIR = ROOT / "logs" / "rsl_rl" / "homie_pushcart"
-VIEWER_LOG_DIRS = (HL_LOG_DIR, ROOT / "logs" / "rsl_rl" / "homie_pushcart_v6")
+VIEWER_LOG_DIRS = (HL_LOG_DIR, ROOT / "logs" / "rsl_rl" / "homie_pushcart_v6", ROOT / "logs" / "rsl_rl" / "homie_pushcart_v7",
+                   ROOT / "logs" / "rsl_rl" / "homie_pushcart_v8")
 UPPER_NAMES = ["waist_yaw", "L_sh_pitch", "L_sh_roll", "L_sh_yaw", "L_elbow", "L_wr_roll", "L_wr_pitch", "L_wr_yaw",
                "R_sh_pitch", "R_sh_roll", "R_sh_yaw", "R_elbow", "R_wr_roll", "R_wr_pitch", "R_wr_yaw"]
 MANUAL = "手动 (手柄 / 滑条)"
@@ -111,7 +112,9 @@ def checkpoint_family(checkpoint_or_run: Path) -> str:
     path = Path(checkpoint_or_run)
     source = run_config_path(path)
     if source is None:
-        return "v6" if "homie_pushcart_v6" in path.parts else "legacy"
+        if "homie_pushcart_v8" in path.parts:
+            return "v8"
+        return "v7" if "homie_pushcart_v7" in path.parts else ("v6" if "homie_pushcart_v6" in path.parts else "legacy")
     root = yaml.compose(source.read_text(encoding="utf-8"))
 
     def field(node, key):
@@ -119,10 +122,15 @@ def checkpoint_family(checkpoint_or_run: Path) -> str:
             return next((value for name, value in node.value if name.value == key), None)
         return None
 
+    release_node = field(field(root, "task"), "release")             # V8 subclasses the V7.1 task (version 7)
+    if isinstance(release_node, yaml.ScalarNode) and str(release_node.value).startswith("8"):
+        return "v8"
     version_node = field(field(root, "task"), "version")
     version = version_node.value.lower() if isinstance(version_node, yaml.ScalarNode) else None
     if version in ("6", "v6"):
         return "v6"
+    if version in ("7", "v7"):
+        return "v7"
     if version is None or version in ("1", "2", "3") or version.startswith(("v1", "v2", "v3")):
         return "legacy"
     raise ValueError(f"unsupported saved task.version={version!r}: {source}")
@@ -136,6 +144,14 @@ def make_viewer_runner(checkpoint: Path, level: int | None = None, homie_checkpo
         from homie_pushcart_v6.task_config import task_cfg_from_run as v6_task_cfg
         from homie_pushcart_v6.mujoco_runner import MujocoV6Runner
         tc = v6_task_cfg(checkpoint, verbose=False)
+    elif family == "v8":                         # V8 teacher on the V7 plant (fine-tuned HOMIE velocity, leg residual)
+        from homie_pushcart_v8.task_config import task_cfg_from_run as v8_task_cfg
+        from homie_pushcart_v8.mujoco_runner import MujocoV8Runner
+        tc = v8_task_cfg(checkpoint, verbose=False)
+    elif family == "v7":                         # V7 plant (its own MJCF and grasp chain)
+        from homie_pushcart_v7.task_config import task_cfg_from_run as v7_task_cfg
+        from homie_pushcart_v7.mujoco_runner import MujocoV7Runner
+        tc = v7_task_cfg(checkpoint, verbose=False)
     else:
         from .mujoco_hl import make_runner
         tc = task_cfg_from_run(checkpoint, verbose=False)
@@ -144,6 +160,12 @@ def make_viewer_runner(checkpoint: Path, level: int | None = None, homie_checkpo
         raise ValueError(f"level {level} is outside 0..{tc.curriculum.num_levels - 1}")
     if family == "v6":
         runner = MujocoV6Runner(checkpoint, level=level, homie_checkpoint=homie_checkpoint)
+        return runner, runner.homie_checkpoint, family
+    if family == "v7":
+        runner = MujocoV7Runner(checkpoint, level=level, homie_checkpoint=homie_checkpoint)
+        return runner, runner.homie_checkpoint, family
+    if family == "v8":
+        runner = MujocoV8Runner(checkpoint, level=level, homie_checkpoint=homie_checkpoint)
         return runner, runner.homie_checkpoint, family
     args = SimpleNamespace(checkpoint=checkpoint, level=level, homie_checkpoint=homie_checkpoint)
     runner, homie = make_runner(args)
@@ -213,7 +235,7 @@ class TwoStageViewer:
 
     @staticmethod
     def _family_label(family):
-        return "V6" if family == "v6" else "V3 / 更早版本"
+        return {"v6": "V6", "v7": "V7", "v8": "V8 教师"}.get(family, "V3 / 更早版本")
 
     def _run_choices(self):
         runs = set(list_viewer_runs()) | {self.run_dir.resolve()}

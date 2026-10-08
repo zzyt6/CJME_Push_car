@@ -52,8 +52,13 @@ def cart_primitives(params: dict, handle_height: float) -> list[Primitive]:
         post_h = handle_height - deck_top
         for j, y in enumerate((-frame["post_half_y"], frame["post_half_y"])):
             prims.append(Primitive(f"post_{i}{j}", "box", (px, py, post_h), (x, y, deck_top + post_h / 2), visual=False))
-        prims.append(Primitive(f"bar_{i}", "cylinder", (handle["radius"], handle["length"]), (x, 0., handle_height),
-                               rpy=(math.pi / 2, 0., 0.), collision=bool(handle["collision"]), visual=True))
+        if handle.get("profile", "round") == "square":           # square tube, faces along the cart x / z axes
+            side = float(handle["side"])
+            prims.append(Primitive(f"bar_{i}", "box", (side, handle["length"], side), (x, 0., handle_height),
+                                   collision=bool(handle["collision"]), visual=True))
+        else:
+            prims.append(Primitive(f"bar_{i}", "cylinder", (handle["radius"], handle["length"]), (x, 0., handle_height),
+                                   rpy=(math.pi / 2, 0., 0.), collision=bool(handle["collision"]), visual=True))
     for k, z in enumerate(params["shelves"]["heights"]):
         prims.append(Primitive(f"shelf_{k}", "box", tuple(params["shelves"]["size"]), (0., 0., z), visual=False))
     if params["model"] == "rigid":

@@ -33,6 +33,10 @@ from .pose import load_initial_pose
 
 
 class PushCartSimEnv(HomieIsaacLabEnv):
+    # Packed scene and its report; a later version with its own assets overrides these class attributes.
+    packed_usd_path = PACKED_USD
+    asset_report_path = ASSET_REPORT
+
     def __init__(self, cfg, project_root: Path, device="cuda:0", headless=True, *, with_cart=True,
                  pose=None, cart_params=None, sim_context=None, allow_robot_cart_contact=False):
         self.with_cart = with_cart
@@ -41,9 +45,9 @@ class PushCartSimEnv(HomieIsaacLabEnv):
         self.cart_params = cart_params or load_cart_params()
         if with_cart and self.cart_params["model"] != "caster":
             raise NotImplementedError("PushCartSimEnv currently loads the caster articulation model only.")
-        if not ASSET_REPORT.is_file() or not PACKED_USD.is_file():
-            raise FileNotFoundError("packed asset missing; run `pushcart.py pack` first")
-        report = json.loads(ASSET_REPORT.read_text(encoding="utf-8"))
+        if not self.asset_report_path.is_file() or not self.packed_usd_path.is_file():
+            raise FileNotFoundError(f"packed asset missing: {self.packed_usd_path}")
+        report = json.loads(self.asset_report_path.read_text(encoding="utf-8"))
         robot_usd = Path(report["robot_usd"])
 
         # ---- identical preamble to HomieIsaacLabEnv.__init__ (g1_grasp.urdf has the same 27 joints) ----
@@ -139,7 +143,7 @@ class PushCartSimEnv(HomieIsaacLabEnv):
         if with_cart:
             robot_prim = '{ENV_REGEX_NS}/Scene/Robot'
             scene_cfg.scene_usd = AssetBaseCfg(prim_path='{ENV_REGEX_NS}/Scene',
-                                               spawn=sim_utils.UsdFileCfg(usd_path=str(PACKED_USD), **spawn_props))
+                                               spawn=sim_utils.UsdFileCfg(usd_path=str(self.packed_usd_path), **spawn_props))
             scene_cfg.robot = ArticulationCfg(prim_path=robot_prim, articulation_root_prim_path='/Geometry/pelvis',
                                               spawn=None, init_state=robot_init, actuators=actuators)
             derived = self.cart_params["derived"]
@@ -150,10 +154,7 @@ class PushCartSimEnv(HomieIsaacLabEnv):
                 init_state=ArticulationCfg.InitialStateCfg(
                     pos=tuple(float(v) for v in derived["base_pos_world"]),
                     rot=(0., 0., math.sin(yaw / 2), math.cos(yaw / 2)), joint_pos={'.*': 0.}, joint_vel={'.*': 0.}),
-                actuators={'casters': ImplicitActuatorCfg(
-                    joint_names_expr=['.*'], stiffness=0.,
-                    damping={'caster_.*_swivel_joint': float(wheels["swivel_damping"]),
-                             'wheel_.*_joint': float(wheels["wheel_damping"])})},
+                actuators=self._cart_actuators(wheels),
             )
         else:
             robot_prim = '{ENV_REGEX_NS}/Robot'
@@ -289,6 +290,13 @@ class PushCartSimEnv(HomieIsaacLabEnv):
               f'cart={"caster" if with_cart else "none"}; actor=456 critic=79 action=12')
         print(f'[pushcart] Lab joint IDs in HOMIE order: {self.joint_ids.tolist()}')
         self.physics_report = self._physics_report()
+
+    def _cart_actuators(self, wheels: dict) -> dict:
+        """Passive cart joints: zero stiffness, viscous damping only (overridden when the cart gains joints)."""
+        return {'casters': ImplicitActuatorCfg(
+            joint_names_expr=['.*'], stiffness=0.,
+            damping={'caster_.*_swivel_joint': float(wheels["swivel_damping"]),
+                     'wheel_.*_joint': float(wheels["wheel_damping"])})}
 
     def _physics_report(self):
         """Same content as HOMIE's report, but the robot prim lives under /Scene when the cart is present."""

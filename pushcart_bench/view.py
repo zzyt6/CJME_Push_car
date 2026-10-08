@@ -16,7 +16,8 @@ def checkpoint_policy_spec(checkpoint) -> str:
         return "passthrough"
     from homie_pushcart.mujoco_viewer import checkpoint_family
     path = Path(checkpoint).resolve()
-    kind = "v6" if checkpoint_family(path) == "v6" else "two_stage"
+    family = checkpoint_family(path)
+    kind = family if family in ("v6", "v7", "v8") else "two_stage"
     return f"{kind}:{path}"
 
 
@@ -91,7 +92,7 @@ class BenchViewer:
         self.run_choices = {"passthrough · 直通 HOMIE": None}
         for run in sorted(runs, key=lambda p: (p.name, str(p.parent)), reverse=True):
             try:
-                family = "V6" if checkpoint_family(run) == "v6" else "V3 / 更早版本"
+                family = {"v6": "V6", "v7": "V7（V7 场景）", "v8": "V8 教师（V7 场景）"}.get(checkpoint_family(run), "V3 / 更早版本")
             except Exception:
                 family = "配置待检查"
             label = f"{family} · {run.name}"
@@ -378,6 +379,8 @@ class BenchViewer:
         if hasattr(self, "sl_vnom"):
             live = "保持指定速度" if self.cb_cruise.value else "弯道可减速贴线"
             lines.append(f"- 指定 vx {self.sl_vnom.value:.2f} m/s · {live} · 滑条载荷 {self.sl_payload.value:.1f} kg（改路径/策略/载荷后点「开始」）")
+        if tel.get("status_line"):
+            lines.append(tel["status_line"])
         if trace.failure:
             lines.append(f"- **失败: {trace.failure}**")
         self.status.content = "\n".join(lines)

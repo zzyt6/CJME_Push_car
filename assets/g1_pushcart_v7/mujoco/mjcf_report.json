@@ -1,0 +1,156 @@
+{
+  "nq": 57,
+  "nv": 55,
+  "nu": 35,
+  "njnt": 45,
+  "robot_hinge_order_matches_homie": true,
+  "actuator_order": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+    "grasp_left_slide_joint_servo",
+    "grasp_left_roll_joint_servo",
+    "grasp_left_tilt_joint_servo",
+    "grasp_left_yaw_joint_servo",
+    "grasp_right_slide_joint_servo",
+    "grasp_right_roll_joint_servo",
+    "grasp_right_tilt_joint_servo",
+    "grasp_right_yaw_joint_servo"
+  ],
+  "timestep": 0.005,
+  "equality_max_violation_at_preset": 6.739199981768957e-07,
+  "contacts_at_preset": [
+    [
+      "floor",
+      "wheel_0_geom",
+      0.0
+    ],
+    [
+      "floor",
+      "wheel_1_geom",
+      0.0
+    ],
+    [
+      "floor",
+      "wheel_2_geom",
+      0.0
+    ],
+    [
+      "floor",
+      "wheel_3_geom",
+      0.0
+    ]
+  ],
+  "hand_geoms_colliding": 0,
+  "feet_z_at_preset": [
+    0.038279625125618444,
+    0.038279625125618444
+  ],
+  "root_height": 0.759214,
+  "wheel_bottom_z": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "cart_pos": [
+    0.8077069274708014,
+    4.999999997604421e-06,
+    0.0
+  ],
+  "robot_cart_contact_excludes": 34,
+  "output": "E:\\CJME_Push_car\\assets\\g1_pushcart_v7\\mujoco\\g1_pushcart_v7.xml",
+  "welds": {
+    "left": {
+      "body1": "left_wrist_yaw_link",
+      "body2": "grasp_left_link",
+      "relpose": [
+        0.10044506841007446,
+        -0.03104015867170462,
+        -0.0003957129990675712,
+        0.7403571582031347,
+        -0.6695177545365018,
+        -0.05741999267138702,
+        0.01789410795198152
+      ]
+    },
+    "right": {
+      "body1": "right_wrist_yaw_link",
+      "body2": "grasp_right_link",
+      "relpose": [
+        0.10044508721461216,
+        0.03104032937202239,
+        -0.0003957297182957953,
+        0.7403571582031345,
+        0.669517754536502,
+        -0.05741999267138374,
+        -0.017894107951985136
+      ]
+    }
+  },
+  "nominal_grasp": {
+    "mu": 0.55,
+    "normal": 75.0,
+    "slide_static": 36.25,
+    "slide_stiffness": 25000.0,
+    "slide_damping": 221.35943621178657,
+    "stiffness": 190.0,
+    "damping": 1.9297668252926312,
+    "roll_stiffness": 37.5,
+    "roll_damping": 0.8573214099741122,
+    "roll_capacity": 11.5,
+    "moment_capacity": 25.0
+  },
+  "grasp_chain": {
+    "left": [
+      "grasp_left_slide_joint",
+      "grasp_left_roll_joint",
+      "grasp_left_tilt_joint",
+      "grasp_left_yaw_joint"
+    ],
+    "right": [
+      "grasp_right_slide_joint",
+      "grasp_right_roll_joint",
+      "grasp_right_tilt_joint",
+      "grasp_right_yaw_joint"
+    ]
+  },
+  "slide_range": {
+    "left": [
+      -0.05,
+      0.12
+    ],
+    "right": [
+      -0.12,
+      0.05
+    ]
+  },
+  "caster_frictionloss": {
+    "swivel": 0.225,
+    "wheel": 0.06253875
+  }
+}

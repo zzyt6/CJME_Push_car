@@ -3,6 +3,9 @@
     passthrough            task command straight into the frozen HOMIE, upper body held at the grasp pose
     two_stage:<ckpt|latest> trained high-level checkpoint (deterministic mean) on top of the frozen HOMIE
     v6:<ckpt|latest>        V6 policy on the same fixed legacy four-sphere plant
+    v7:<ckpt|latest>        V7 policy on the V7 plant (square-tube grasp chain, Coulomb cart)
+    <kind>@<plant>[:<ckpt>] passthrough / v6 / v7 on an explicit plant: legacy (every bench before V7) or v7
+                            (pushcart_bench/policies_cross.py) -- compare versions on ONE plant
     robot_only             HOMIE without the cart, tracked body = pelvis (upper bound, quantifies the cart's cost)
     plugin:<module>:<attr> any class implementing ``PolicyUnderTest`` (future RL stages)
 
@@ -266,11 +269,20 @@ class RobotOnlyPolicy:
 def parse_policy_spec(spec: str) -> dict:
     """``passthrough`` | ``robot_only`` | ``two_stage:<ckpt|latest>`` | ``v6:<ckpt|latest>`` | plugin."""
     spec = spec.strip()
+    head, _, rest = spec.partition(":")
+    if "@" in head:                             # <kind>@<plant>[:ckpt]: explicit plant (policies_cross)
+        kind, _, plant = head.partition("@")
+        if kind not in ("passthrough", "v6", "v7"):
+            raise ValueError(f"plant selection supports passthrough / v6 / v7, got {kind!r}")
+        if kind == "passthrough" and rest:
+            raise ValueError("passthrough@<plant> takes no checkpoint")
+        return {"kind": "cross", "version": None if kind == "passthrough" else int(kind[1]), "plant": plant,
+                "checkpoint": (rest or "latest") if kind != "passthrough" else None}
     if spec in ("passthrough", "robot_only"):
         return {"kind": spec}
     tag, _, checkpoint = spec.partition(":")
-    if tag == "v6":
-        return {"kind": "v6", "checkpoint": checkpoint or "latest"}
+    if tag in ("v6", "v7", "v8", "v8_legres0"):
+        return {"kind": tag, "checkpoint": checkpoint or "latest"}
     if spec.startswith("two_stage"):
         rest = spec[len("two_stage"):]
         ckpt = rest[1:] if rest.startswith(":") and len(rest) > 1 else "latest"
@@ -291,9 +303,25 @@ def make_policy(spec: str, level: int = 17, homie_checkpoint: Path | None = None
     if scene_version != "original":
         raise ValueError("One fixed legacy four-sphere backend is supported; scene selection is not supported")
     p = parse_policy_spec(spec)
+    if p["kind"] == "cross":
+        from .policies_cross import CrossPolicy
+        checkpoint = p["checkpoint"]
+        if checkpoint == "latest":
+            if p["version"] == 6:
+                from .policies_v6 import resolve_v6_checkpoint as resolve
+            else:
+                from .policies_v7 import resolve_v7_checkpoint as resolve
+            checkpoint = resolve("latest")
+        return CrossPolicy(p["version"], p["plant"], checkpoint, level, homie_checkpoint)
     if p["kind"] == "v6":
         from .policies_v6 import V6Policy
         return V6Policy(p["checkpoint"], level, homie_checkpoint)
+    if p["kind"] == "v7":                       # V7 plant (its own MJCF), grip loss recorded but not a stop
+        from .policies_v7 import V7Policy
+        return V7Policy(p["checkpoint"], level, homie_checkpoint)
+    if p["kind"] in ("v8", "v8_legres0"):      # V8 teacher on the V7 plant (fine-tuned HOMIE velocity + leg residual)
+        from .policies_v8 import V8Policy
+        return V8Policy(p["checkpoint"], level, homie_checkpoint, zero_leg_residual=(p["kind"] == "v8_legres0"))
     if p["kind"] == "passthrough":
         return PassthroughPolicy(level, homie_checkpoint)
     if p["kind"] == "robot_only":
