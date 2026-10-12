@@ -11,7 +11,8 @@ from homie_isaaclab.math_utils import torch_rand_float
 from homie_pushcart_v7.task_env import PushCartEnv as V71Env
 
 from .task_config import (ACTION_DIM, FRAME_DIM, HL_ACTIONS, LEG_ACTIONS, LONG_HISTORY, POLICY_HISTORY,
-                          PRIVILEGED_DIM, validate_v8)
+                          PRIVILEGED_DIM, leg_residual_bound, leg_residual_filter_alpha, leg_residual_map,
+                          upper_drive_gains, validate_v8)
 
 LEGACY_FRAME = 124
 
@@ -28,6 +29,46 @@ class PushCartEnv(V71Env):
         self.homie_velocity_save_path = None            # set by the direct env (run directory)
         self._setup_homie_velocity()
         self._wrap_lowlevel()
+        self._setup_upper_drive()
+
+    # ------------------------------------------------------------------ upper-body drive (V8.1)
+    def _setup_upper_drive(self):
+        """Explicit mode: switch the PhysX drive of the 15 upper joints off; their PD torque is computed in
+        _apply_action with v8.upper_drive's gains (x HOMIE's per-episode gain factors x the arm-drive scale)."""
+        self.upper_explicit = self.task_cfg.v8.upper_drive.mode == "explicit"
+        if not hasattr(self, "arm_gain_scale"):
+            self.arm_gain_scale = torch.ones(self.num_envs, device=self.device)
+        if not self.upper_explicit:
+            return
+        lower = self.num_lower_dof
+        kp, kd = upper_drive_gains(self.task_cfg, self.dof_names[lower:])
+        self.upper_kp = torch.tensor(kp, device=self.device)
+        self.upper_kd = torch.tensor(kd, device=self.device)
+        act = self.robot.actuators["upper"]
+        act.stiffness[:] = 0.
+        act.damping[:] = 0.
+        self.robot.write_joint_stiffness_to_sim_index(stiffness=act.stiffness, joint_ids=act.joint_indices)
+        self.robot.write_joint_damping_to_sim_index(damping=act.damping, joint_ids=act.joint_indices)
+        print(f"[pushcart-v8] upper body: explicit PD, kp {kp}, kd {kd}", flush=True)
+
+    def _apply_action(self):
+        if not getattr(self, "upper_explicit", False):
+            return super()._apply_action()
+        cfg, lower = self.cfg, self.num_lower_dof
+        applied = (torch.where(self._physics_substep >= self._delay_steps, self.actions, self.last_actions)
+                   if cfg.domain_rand.delay else self.actions)
+        self.joint_pos_target = self.default_dof_pos + cfg.control.action_scale * applied
+        err, vel = self.joint_pos_target - self.dof_pos, self.dof_vel
+        s = self.arm_gain_scale[:, None]
+        legs = self.p_gains[:lower] * self.Kp_factors[:, :lower] * err[:, :lower] \
+            - self.d_gains[:lower] * self.Kd_factors[:, :lower] * vel[:, :lower]
+        upper = self.upper_kp * self.Kp_factors[:, lower:] * s * err[:, lower:] \
+            - self.upper_kd * self.Kd_factors[:, lower:] * s * vel[:, lower:]
+        torques = (torch.cat((legs, upper), -1) + self.actuation_offset + self.joint_injection).clamp(
+            -self.torque_limits, self.torque_limits)
+        self.robot.set_joint_effort_target_index(target=torques, joint_ids=self.joint_ids)
+        self.robot.set_joint_position_target_index(target=self.joint_pos_target[:, lower:], joint_ids=self.joint_ids[lower:])
+        self._physics_substep += 1
 
     # ------------------------------------------------------------------ buffers
     def _init_hl_buffers(self):
@@ -38,6 +79,7 @@ class PushCartEnv(V71Env):
         self.leg_residual = z(N, LEG_ACTIONS)            # applied this step (HOMIE action units)
         self.leg_residual_prev = z(N, LEG_ACTIONS)
         self._leg_residual_raw_prev = z(N, LEG_ACTIONS)  # for the shared high-level action delay
+        self.leg_raw = z(N, LEG_ACTIONS)                 # network output u actually used this step (after the delay)
         self.v8_actions = z(N, ACTION_DIM)               # applied 30 actions (observation)
         self.cam_true = z(N, cam.history_steps, 1)       # ring of the true relative yaw
         self.cam_pose = z(N, 1)                          # current camera measurement (held between updates)
@@ -152,11 +194,15 @@ class PushCartEnv(V71Env):
     def step(self, actions: torch.Tensor):
         lr = self.task_cfg.v8.leg_residual
         actions = actions.to(self.device)
-        raw = actions[:, HL_ACTIONS:].clamp(-lr.clip, lr.clip)
-        applied = torch.where(self.hl_delay.unsqueeze(1) > 0, self._leg_residual_raw_prev, raw)
+        raw = actions[:, HL_ACTIONS:]
+        u = torch.where(self.hl_delay.unsqueeze(1) > 0, self._leg_residual_raw_prev, raw)
         self._leg_residual_raw_prev.copy_(raw)
+        self.leg_raw.copy_(u)
+        target = leg_residual_map(u, self.task_cfg)                       # range * tanh(u)  |  clamp(u, +-clip)
+        alpha = leg_residual_filter_alpha(self.task_cfg, self.dt)         # first-order low-pass (1 = off)
         self.leg_residual_prev.copy_(self.leg_residual)
-        self.leg_residual.copy_(applied if lr.enabled else torch.zeros_like(applied))
+        filtered = self.leg_residual + alpha * (target - self.leg_residual)
+        self.leg_residual.copy_(filtered if lr.enabled else torch.zeros_like(filtered))
         out = super().step(actions[:, :HL_ACTIONS])
         if getattr(self, "hv_train", False):
             self.hv_ptr += 1
@@ -172,6 +218,13 @@ class PushCartEnv(V71Env):
     def _reward_leg_residual_rate(self):
         return (self.leg_residual - self.leg_residual_prev).square().sum(dim=1)
 
+    def _reward_leg_residual_excess(self):
+        """tanh mode: keep the network output where tanh still responds (no drift into saturation)."""
+        lr = self.task_cfg.v8.leg_residual
+        if lr.mode != "tanh" or not lr.enabled:
+            return torch.zeros(self.num_envs, device=self.device)
+        return (self.leg_raw.abs() - float(lr.excess_threshold)).clamp_min(0.).square().sum(dim=1)
+
     def _log_episode_diagnostics(self, env_ids):
         super()._log_episode_diagnostics(env_ids)
         ep = self.extras.setdefault("episode", {})
@@ -184,10 +237,41 @@ class PushCartEnv(V71Env):
             ep["homie_velocity_updates"] = torch.tensor(float(self.hv_updates), device=self.device)
             ep["homie_velocity_tuned_active"] = self.hv_active_frac.clone()
         ep["leg_residual_abs"] = self.leg_residual.abs().mean()
+        bound = leg_residual_bound(self.task_cfg)
+        ep["leg_residual_at_bound"] = (self.leg_residual.abs() >= 0.95 * bound).float().mean()
+        ep["leg_raw_abs"] = self.leg_raw.abs().mean()
+        ep["leg_raw_excess_frac"] = (self.leg_raw.abs() > float(self.task_cfg.v8.leg_residual.excess_threshold)).float().mean()
 
     # ------------------------------------------------------------------ resets
+    def _randomize_arm_drive(self, env_ids):
+        """Scale the upper-body implicit drive gains per episode (PhysX and the actuator's torque estimate)."""
+        ad = self.task_cfg.v8.arm_drive
+        if not hasattr(self, "arm_gain_scale"):
+            self.arm_gain_scale = torch.ones(self.num_envs, device=self.device)
+        ids = env_ids.to(torch.long)
+        lo, hi = math.log(ad.scale_range[0]), math.log(ad.scale_range[1])
+        s = torch.exp(lo + (hi - lo) * torch.rand(len(ids), device=self.device))
+        self.arm_gain_scale[ids] = s
+        if self.task_cfg.v8.upper_drive.mode == "explicit":     # the explicit PD in _apply_action uses the scale
+            return
+        act = self.robot.actuators["upper"]
+        if not hasattr(self, "_upper_k0"):
+            self._upper_k0, self._upper_d0 = act.stiffness.clone(), act.damping.clone()
+        act.stiffness[ids] = self._upper_k0[ids] * s[:, None]
+        act.damping[ids] = self._upper_d0[ids] * s[:, None]
+        jids = act.joint_indices
+        self.robot.write_joint_stiffness_to_sim_index(stiffness=act.stiffness[ids], joint_ids=jids, env_ids=ids)
+        self.robot.write_joint_damping_to_sim_index(damping=act.damping[ids], joint_ids=jids, env_ids=ids)
+        if not getattr(self, "_arm_drive_logged", False):
+            self._arm_drive_logged = True
+            k = self.robot.data.joint_stiffness.torch[ids[:2]][:, jids] if not isinstance(jids, slice) else None
+            print(f"[pushcart-v8] arm drive randomised: scales {s[:2].tolist()}, sim stiffness[:2, :3] "
+                  f"{None if k is None else k[:, :3].tolist()}, default {self._upper_k0[0, :3].tolist()}", flush=True)
+
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
+        if len(env_ids) and self.task_cfg.v8.arm_drive.enabled and hasattr(self, "robot"):
+            self._randomize_arm_drive(env_ids)
         if not hasattr(self, "cam_latency") or len(env_ids) == 0:
             return
         cam, dev, n = self.task_cfg.v8.camera, self.device, len(env_ids)
@@ -203,6 +287,7 @@ class PushCartEnv(V71Env):
         self.leg_residual[ids] = 0.
         self.leg_residual_prev[ids] = 0.
         self._leg_residual_raw_prev[ids] = 0.
+        self.leg_raw[ids] = 0.
         self.frames_short[ids] = 0.
         self.frames_long[ids] = 0.
 

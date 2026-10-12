@@ -33,6 +33,13 @@ def main():
     p.add_argument("--payload", type=float, default=15.0)
     p.add_argument("--disturbances", choices=("off", "on"), default="off")
     p.add_argument("--zero_leg_residual", action="store_true", help="V8: force the 12 leg-residual actions to zero")
+    p.add_argument("--stop_before_goal", type=float, default=0.5,
+                   help="end a run this arc length before the goal (m; 0 = drive to the goal and settle)")
+    p.add_argument("--upper_gain_scale", type=float, default=1.0, help="scale upper-body drive stiffness / damping")
+    p.add_argument("--task_set", nargs="*", default=[], help="task overrides section.key=<json>, e.g. "
+                                                              "grasp.friction_coeff_range=[0.8,0.8]")
+    p.add_argument("--save_frames", type=int, default=0, help="V8: save the observation frames + explicit truth of "
+                                                                "the first N envs (input-shift analysis)")
     AppLauncher.add_app_launcher_args(p)
     a = p.parse_args()
     app = AppLauncher(a)
@@ -52,13 +59,25 @@ def main():
         fcfg = FollowerConfig.from_dict({**bench["follower"], "cruise": True, "timeout_s": 90.0})   # as the documented course check
         course = build_path("composite_course", bench["paths"]["composite_course"])
         cfg = G1RoughCfg(); apply_config(cfg, homie_baseline()); cfg.env.num_envs = N
+        if a.upper_gain_scale != 1.0:                             # diagnostic: arm / waist drive compliance
+            for k in ("waist", "shoulder", "elbow", "wrist", "hand"):
+                cfg.control.stiffness[k] = cfg.control.stiffness[k] * a.upper_gain_scale
+                cfg.control.damping[k] = cfg.control.damping[k] * a.upper_gain_scale
+            print(f"[course] upper drive gains x{a.upper_gain_scale}", flush=True)
         if a.policy == "V8":
             # V8 teacher: the run's saved task (V7.1 plant), its paired fine-tuned HOMIE velocity estimator (frozen)
             from homie_pushcart_v8.task_config import task_cfg_from_run
             from homie_pushcart_v8.task_env import PushCartEnv as V8Env
             from homie_pushcart_v8.training import homie_velocity_file
+            from homie_pushcart.hl_policy import import_rsl_rl5
+            import_rsl_rl5()
+            from homie_pushcart_v8.student_policy import is_student_run
+            v8_student = is_student_run(a.checkpoint)
             task = task_cfg_from_run(a.checkpoint)
             est = homie_velocity_file(a.checkpoint)
+            if est is None and task.v8.homie_velocity.init_checkpoint:     # student run: the teacher's estimator
+                est = Path(task.v8.homie_velocity.init_checkpoint)
+            task.v8.emit_history = v8_student
             task.v8.homie_velocity.init_checkpoint = str(est) if est is not None else ""
             task.v8.homie_velocity.train = False
             print(f"[course] V8 HOMIE velocity estimator: {est}", flush=True)
@@ -67,6 +86,16 @@ def main():
             task = PushCartTaskCfg()
             EnvClass = PushCartEnv
         task.curriculum_v7.enabled = False
+        for item in a.task_set:                                   # diagnostic physics overrides
+            key, val = item.split("=", 1)
+            obj = task
+            *path, leaf = key.split(".")
+            for part in path:
+                obj = getattr(obj, part)
+            if not hasattr(obj, leaf):
+                raise ValueError(f"unknown task field {key}")
+            setattr(obj, leaf, json.loads(val))
+            print(f"[course] task.{key} = {val}", flush=True)
         task.env.episode_length_s = fcfg.timeout_s + 10.0
         env = EnvClass(cfg, task, ROOT, dev, True, level=0)
         env.cur.d[:] = a.difficulty
@@ -118,17 +147,14 @@ def main():
         elif a.policy == "V8":
             from homie_pushcart.hl_policy import import_rsl_rl5
             import_rsl_rl5()
-            from tensordict import TensorDict
-            from homie_pushcart_v8.teacher_policy import TeacherActor
-            o0 = env.observation_dict()
-            probe = TensorDict({"policy": o0["policy"][:2], "privileged": o0["privileged"][:2]}, batch_size=[2])
-            import yaml
-            acfg = yaml.load((Path(a.checkpoint).parent / "params/agent.yaml").read_text(encoding="utf-8"),
-                             Loader=yaml.FullLoader)["actor"]
-            kw = {k: v for k, v in acfg.items() if k != "class_name"}
-            actor = TeacherActor(probe, {"actor": ["policy", "privileged"]}, "actor", 30, **kw).to(dev)
-            actor.load_state_dict(torch.load(a.checkpoint, map_location=dev, weights_only=False)["actor_state_dict"])
-            pol = actor.as_jit().to(dev).eval()
+            if v8_student:                       # deployable student: (policy, 32-frame history)
+                from homie_pushcart_v8.student_policy import load_student
+                spol = load_student(a.checkpoint, dev)
+                a.tag += "_student"
+                pol = lambda policy, privileged: spol(policy, env.observation_dict()["history"])   # noqa: E731
+            else:                                # ROA teacher (simulation only): (policy, privileged)
+                from homie_pushcart_v8.teacher_policy import load_teacher
+                pol = load_teacher(a.checkpoint, dev)
             if a.zero_leg_residual:
                 def act_fn(o):
                     out = pol(o["policy"], o["privileged"]).clone()
@@ -155,6 +181,7 @@ def main():
         p0, c0, s0 = pose[:, :2].copy(), np.cos(yaw0), np.sin(yaw0)
         traj = [[] for _ in range(N)]                       # (t, x, y, s, cross_track) in the course's local frame
         ratios, short, run = [], np.zeros(N), torch.zeros(N, device=dev)
+        frame_log = []
         gait = {k: [] for k in ("slip", "fpeak", "f_over", "stumble", "roll", "pitch", "angvel_xy", "height",
                                 "torque_rms", "power", "track_err", "res_abs", "res_clip", "air_time", "flight",
                                 "double")}
@@ -173,17 +200,26 @@ def main():
                 f = followers[i]
                 cmd[i] = f.update((pose[i, 0], pose[i, 1], yaw[i]), vel[i])
                 dx, dy = pose[i, 0] - p0[i, 0], pose[i, 1] - p0[i, 1]
-                traj[i].append((f.state.t, c0[i] * dx + s0[i] * dy, -s0[i] * dx + c0[i] * dy, f.state.s, f.state.cross_track))
+                traj[i].append((f.state.t, c0[i] * dx + s0[i] * dy, -s0[i] * dx + c0[i] * dy, f.state.s, f.state.cross_track,
+                                vel[i, 0], vel[i, 1], vel[i, 2]))         # + cart-frame vx, vy, wz
                 if not f.state.reached:
                     xt[i].append(abs(f.state.cross_track))
                 if f.state.s < 19.0:
                     xt19[i].append(abs(f.state.cross_track))
-                if f.state.reached and f.state.t - f.state.t_reached >= fcfg.post_reach_s:
+                if a.stop_before_goal > 0 and f.state.s >= f.path.length - a.stop_before_goal:
+                    # the pooled statistic only covers s < 19 m: skip the goal homing / settling phase
+                    result[i] = {"status": "reached", "t": f.state.t, "goal_err_m": f.state.dist_goal}
+                    active[i] = False
+                elif f.state.reached and f.state.t - f.state.t_reached >= fcfg.post_reach_s:
                     result[i] = {"status": "reached", "t": f.state.t_reached, "goal_err_m": f.state.dist_goal}
                     active[i] = False
                 elif f.state.timed_out:
                     result[i] = {"status": "timeout", "s": f.state.s}
                     active[i] = False
+            if a.save_frames and hasattr(env, "frames_short"):
+                k = a.save_frames
+                frame_log.append(np.concatenate((env.frames_short[:k, -1].cpu().numpy(), env.privileged[:k].cpu().numpy(),
+                                                 active[:k, None].astype(np.float32)), -1))
             env.cmd_task[:] = torch.as_tensor(cmd, device=dev)
             env.cmd_timer[:] = 10 ** 9
             with torch.inference_mode():
@@ -221,7 +257,8 @@ def main():
                 if hasattr(env, "leg_residual"):
                     r_ = env.leg_residual[gm]
                     gait["res_abs"].append(r_.abs().mean(-1))
-                    gait["res_clip"].append((r_.abs() >= 0.995 * float(task.v8.leg_residual.clip)).float().mean(-1))
+                    from homie_pushcart_v8.task_config import leg_residual_bound
+                    gait["res_clip"].append((r_.abs() >= 0.95 * leg_residual_bound(task)).float().mean(-1))
                     gait.setdefault("res_vec", []).append(r_.detach().cpu())
                     if "res_prev" in gait:
                         pm = gm.cpu() & gait["res_prev_mask"]
@@ -312,6 +349,8 @@ def main():
             np.savez_compressed(o / f"traj_{name}_{a.payload:g}kg_d{a.difficulty:g}{a.tag}.npz",
                                 course_xy=course.xy, status=np.array([result[i]["status"] for i in ids]),
                                 **{f"env{j}": np.array(traj[i]) for j, i in enumerate(ids)})
+        if frame_log:
+            np.save(o / f"frames_{a.policy}_{a.payload:g}kg{a.tag}.npy", np.array(frame_log))
         (o / f"{a.policy}_{a.payload:g}kg_d{a.difficulty:g}_dist{a.disturbances}{a.tag}.json").write_text(json.dumps({**out, "runs_detail": result}, indent=1), encoding="utf-8")
     except BaseException:
         import traceback

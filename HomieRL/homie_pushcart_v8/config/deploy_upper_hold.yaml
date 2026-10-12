@@ -1,0 +1,59 @@
+# Push-cart V8 deploy: upper-body hold target and hand grasp (rad).
+#
+# hold_target_q = initial_pose.yaml robot.joint_pos + robot.upper_hold_offset
+#   (HomieRL/homie_pushcart/config/initial_pose.yaml). This is the target sent when the policy's arm action is 0;
+#   at run time: q_target = clip(hold_target_q + delta, hard joint limits),
+#   delta = a[3:18] * [waist 0.3, arm 0.4 x 14], a clipped to +-1, slew limit 3.0 rad/s.
+#   upper_hold_offset is the gravity sag measured under the sim upper-body PD gains below.
+# hand_grasp = HomieRL/homie_pushcart_v7/config/grasp_pose_v7.yaml finger_pos (fitted to the 22 mm square handle tube,
+#   0.5 mm clearance). Fixed in simulation (baked into the URDF), not commanded by the policy.
+
+upper_body_order: [waist_yaw_joint,
+                   left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint, left_elbow_joint,
+                   left_wrist_roll_joint, left_wrist_pitch_joint, left_wrist_yaw_joint,
+                   right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_joint,
+                   right_wrist_roll_joint, right_wrist_pitch_joint, right_wrist_yaw_joint]
+
+hold_target_q:
+  waist_yaw_joint: 0.000117
+  left_shoulder_pitch_joint: -0.674523
+  left_shoulder_roll_joint: 0.398195
+  left_shoulder_yaw_joint: -1.000380
+  left_elbow_joint: -0.296135
+  left_wrist_roll_joint: 1.221918
+  left_wrist_pitch_joint: 1.295205
+  left_wrist_yaw_joint: -0.463481
+  right_shoulder_pitch_joint: -0.674625
+  right_shoulder_roll_joint: -0.397855
+  right_shoulder_yaw_joint: 1.000569
+  right_elbow_joint: -0.296080
+  right_wrist_roll_joint: -1.221824
+  right_wrist_pitch_joint: 1.294801
+  right_wrist_yaw_joint: 0.463465
+
+# Same values as a list in upper_body_order.
+hold_target_q_list: [0.000117,
+                     -0.674523, 0.398195, -1.000380, -0.296135, 1.221918, 1.295205, -0.463481,
+                     -0.674625, -0.397855, 1.000569, -0.296080, -1.221824, 1.294801, 0.463465]
+
+# Sim upper-body PD gains the hold offset was measured with (homie_pushcart_v8/task_config.py upper_drive).
+upper_kp: {waist: 300.0, shoulder_pitch: 100.0, shoulder_roll: 100.0, shoulder_yaw: 50.0, elbow: 50.0, wrist: 20.0}
+upper_kd: {waist: 3.0, shoulder_pitch: 2.0, shoulder_roll: 2.0, shoulder_yaw: 2.0, elbow: 2.0, wrist: 1.0}
+
+hand_grasp:
+  left:
+    left_hand_thumb_0_joint: 0.0
+    left_hand_thumb_1_joint: 0.335606
+    left_hand_thumb_2_joint: 1.541224
+    left_hand_middle_0_joint: -1.218143
+    left_hand_middle_1_joint: -1.510416
+    left_hand_index_0_joint: -1.216925
+    left_hand_index_1_joint: -1.313455
+  right:
+    right_hand_thumb_0_joint: 0.0
+    right_hand_thumb_1_joint: -0.333515
+    right_hand_thumb_2_joint: -1.544997
+    right_hand_middle_0_joint: 1.213678
+    right_hand_middle_1_joint: 1.510667
+    right_hand_index_0_joint: 1.216925
+    right_hand_index_1_joint: 1.313455

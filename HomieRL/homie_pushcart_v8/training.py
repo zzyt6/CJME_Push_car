@@ -1,75 +1,48 @@
-"""V8-only forwarding into NVIDIA's standard RSL-RL train/play entrypoints (teacher phase).
+"""V8 training commands, forwarded into NVIDIA's standard RSL-RL train entrypoint (rma_policy.py, final design):
 
-New training uses the pinned V3.2 defaults. Resume restores a complete V8
-environment/runner config; it never treats a V3/V5 checkpoint as V8 weights.
-The original V3.2 curriculum restart semantics are retained.
+    pushcart_v8.py train [--roa_from <roa model.pt>] [env.task.v8.arm_drive.enabled=true] ...   ROA teacher / continuation
+    pushcart_v8.py adapt --checkpoint <roa model.pt>                                           RMA phase 2 (phi only)
+    pushcart_v8.py adapt --student_rl --checkpoint <phase-2 model.pt>                         student RL (pi only)
+
+New training uses the pinned V3.2 defaults (environment, runner, PPO values).
 """
 from __future__ import annotations
 
 import argparse
-from copy import deepcopy
 import os
 from pathlib import Path
 import subprocess
 import sys
 
-from homie_pushcart.training import _lab_scripts, _checkpoint_args, _selection_patterns
-from homie_pushcart.training import _resolve_checkpoint as _resolve_existing_checkpoint
+from homie_pushcart.training import _lab_scripts
 
-from homie_pushcart_v7.baseline import config_dict
 from homie_pushcart_v7.paths import ROOT
-from .task_config import run_config_path, task_cfg_from_run
+from .task_config import task_cfg_from_run
 
-TASK_ID = "Homie-G1-PushCart-V8-Teacher-Direct-v0"
+TEACHER_ROA_TASK_ID = "Homie-G1-PushCart-V8-TeacherROA-Direct-v0"
 EXPERIMENT = "homie_pushcart_v8"
-_RESTORE_RUN_ENV = "HOMIE_PUSHCART_V8_RESTORE_CHECKPOINT"
-_ACTOR_CLASS = "homie_pushcart_v8.teacher_policy:TeacherActor"
-_PPO_CLASS = "PPO"
 
 
 def register_tasks():
     """Pre-Kit callback: register string factories without simulator imports."""
     from . import register_tasks as register_base_tasks
-    args = register_base_tasks()
-    if os.environ.get(_RESTORE_RUN_ENV):
-        import gymnasium as gym
-        spec = gym.spec(TASK_ID)
-        spec.kwargs["env_cfg_entry_point"] = "homie_pushcart_v8.training:restored_env_cfg"
-        spec.kwargs["rsl_rl_cfg_entry_point"] = "homie_pushcart_v8.training:restored_runner_cfg"
-    return args
-
-
-def _saved_configs(checkpoint):
-    import yaml
-    task = task_cfg_from_run(checkpoint, verbose=False)
-    source = run_config_path(checkpoint)
-    agent_source = source.with_name("agent.yaml")
-    if not agent_source.is_file():
-        raise FileNotFoundError(f"Saved V8 params/agent.yaml not found for {checkpoint}")
-    env = yaml.load(source.read_text(encoding="utf-8"), Loader=yaml.FullLoader)
-    agent = yaml.load(agent_source.read_text(encoding="utf-8"), Loader=yaml.FullLoader)
-    if not isinstance(agent, dict):
-        raise ValueError(f"Saved V8 agent config must be a mapping: {agent_source}")
-    if (agent.get("actor", {}).get("class_name") != _ACTOR_CLASS
-            or agent.get("algorithm", {}).get("class_name") != _PPO_CLASS
-            or agent.get("obs_groups") != {"actor": ["policy", "privileged"], "critic": ["critic"]}):
-        raise ValueError("Saved checkpoint is not the V8 teacher Actor/PPO observation contract")
-    for name in ("actor", "critic"):
-        model = agent.get(name, {})
-        if (model.get("hidden_dims") != [512, 256, 128]
-                or model.get("activation") != "elu" or model.get("obs_normalization") is not True):
-            raise ValueError(f"V8 retains the V3.2 {name} MLP and observation normalization")
-    if not isinstance(env.get("homie"), dict):
-        raise ValueError(f"Saved V8 environment has no complete HOMIE profile: {source}")
-    return env, agent, task
+    return register_base_tasks()
 
 
 def homie_velocity_file(checkpoint) -> Path | None:
-    """The fine-tuned HOMIE velocity estimator saved with a teacher checkpoint (model_<N>.pt ->
-    homie_velocity_estimator_<N>.pt; the latest file when no numbered copy exists)."""
+    """The fine-tuned HOMIE velocity estimator paired with a checkpoint: homie_velocity_estimator_<N>.pt with N the
+    global iteration (model number + the run's start_update); else the run's latest file; else (phase 2 / student RL,
+    which do not train it) the estimator the run was started with."""
     checkpoint = Path(checkpoint)
     run = checkpoint.parent if checkpoint.suffix == ".pt" else checkpoint
     number = checkpoint.stem.split("_")[-1] if checkpoint.suffix == ".pt" else ""
+    if number.isdigit():
+        try:
+            import yaml
+            agent = yaml.load((run / "params/agent.yaml").read_text(encoding="utf-8"), Loader=yaml.FullLoader) or {}
+            number = str(int(number) + int((agent.get("algorithm") or {}).get("start_update", 0) or 0))
+        except (OSError, ValueError, TypeError):
+            pass
     paired = run / f"homie_velocity_estimator_{number}.pt"
     if number.isdigit() and paired.is_file():
         return paired
@@ -77,6 +50,12 @@ def homie_velocity_file(checkpoint) -> Path | None:
     if latest.is_file():
         print(f"[pushcart-v8] WARNING: no {paired.name}; using the latest estimator {latest}", flush=True)
         return latest
+    try:
+        init = task_cfg_from_run(run, verbose=False).v8.homie_velocity.init_checkpoint
+        if init and Path(init).is_file():
+            return Path(init)
+    except Exception:
+        pass
     return None
 
 
@@ -91,53 +70,24 @@ def _hv_override(checkpoint, *, train: bool | None = None) -> list[str]:
     return out
 
 
-def restored_env_cfg():
-    from .lab_config import PushCartEnvCfg
-    from .task_config import ACTION_DIM, num_critic_obs, num_policy_obs
-    saved, _, task = _saved_configs(os.environ[_RESTORE_RUN_ENV])
-    cfg = PushCartEnvCfg()
-    cfg.task = config_dict(task)
-    cfg.task.pop("source_yaml", None)
-    estimator = homie_velocity_file(os.environ[_RESTORE_RUN_ENV])
-    if estimator is not None and cfg.task.get("v8", {}).get("homie_velocity", {}).get("enabled", False):
-        cfg.task["v8"]["homie_velocity"]["init_checkpoint"] = estimator.resolve().as_posix()
-    cfg.homie = deepcopy(saved["homie"])
-    cfg.observation_space = num_policy_obs()
-    cfg.state_space = num_critic_obs()
-    cfg.action_space = ACTION_DIM
-    for name in ("checkpoint", "decimation", "episode_length_s", "curriculum_level", "seed",
-                 "enable_randomization", "allow_robot_cart_contact", "cart_solver_iterations"):
-        if name not in saved:
-            raise ValueError(f"Incomplete saved V8 environment: missing {name}")
-        setattr(cfg, name, deepcopy(saved[name]))
-    for name in ("dt", "gravity"):
-        if name not in saved.get("sim", {}):
-            raise ValueError(f"Incomplete saved V8 environment: missing sim.{name}")
-        setattr(cfg.sim, name, deepcopy(saved["sim"][name]))
-    return cfg
+def _roa_source_overrides(checkpoint) -> list[str]:
+    """Environment settings a ROA run was trained with that continuations, phase 2 and student RL must keep: the
+    upper-body drive (V8.0 runs: implicit; the ROA task default is explicit since V8.1) and arm-drive randomisation."""
+    import yaml
+    v8 = task_cfg_from_run(checkpoint, verbose=False).v8
+    agent = yaml.load((Path(checkpoint).parent / "params/agent.yaml").read_text(encoding="utf-8"),
+                      Loader=yaml.FullLoader) or {}
+    head = bool((agent.get("actor") or {}).get("velocity_head", False))          # V8.0 runs: no velocity head
+    return [f"env.task.v8.upper_drive.mode={v8.upper_drive.mode}",
+            f"env.task.v8.arm_drive.enabled={'true' if v8.arm_drive.enabled else 'false'}",
+            f"agent.actor.velocity_head={'true' if head else 'false'}"]
 
 
-def restored_runner_cfg():
-    from .lab_config import TeacherRunnerCfg as PushCartRunnerCfg
-    _, saved, _ = _saved_configs(os.environ[_RESTORE_RUN_ENV])
-    cfg = PushCartRunnerCfg()
-    fields = ("class_name", "actor", "critic", "algorithm", "num_steps_per_env", "empirical_normalization",
-              "obs_groups", "clip_actions", "seed", "save_interval", "check_for_nan")
-    missing = [name for name in fields if name not in saved]
-    if missing:
-        raise ValueError(f"Incomplete saved V8 runner config: missing {', '.join(missing)}")
-    cfg.from_dict({name: deepcopy(saved[name]) for name in fields})
-    return cfg
-
-
-def _run(entrypoint: Path, args: list[str], *, restore_checkpoint: Path | None = None) -> int:
+def _run(entrypoint: Path, args: list[str]) -> int:
     command = [sys.executable, "-u", str(entrypoint), "--rl_library", "rsl_rl",
                "--external_callback", "homie_pushcart_v8.training.register_tasks", *args]
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(part for part in (str(ROOT / "HomieRL"), env.get("PYTHONPATH", "")) if part)
-    env.pop(_RESTORE_RUN_ENV, None)
-    if restore_checkpoint is not None:
-        env[_RESTORE_RUN_ENV] = str(restore_checkpoint)
     print("[pushcart-v8] NVIDIA entrypoint:", subprocess.list2cmdline(command), flush=True)
     return subprocess.run(command, cwd=ROOT, env=env).returncode
 
@@ -157,96 +107,77 @@ def _reject_alternate_profiles(argv):
                              f"alternate profile option {arg.split('=', 1)[0]} is not supported")
 
 
-def _resolve_checkpoint(checkpoint, load_run, experiment):
-    if not (ROOT / "logs/rsl_rl" / experiment).is_dir() and not (checkpoint and Path(checkpoint).is_file()):
-        raise FileNotFoundError(f"No V8 training run under logs/rsl_rl/{experiment}; train V8 first")
-    resolved = _resolve_existing_checkpoint(checkpoint, load_run, experiment)
-    _saved_configs(resolved)
-    return resolved
+def _rma_checkpoint(path) -> Path:
+    from .rma_policy import is_rma_run
+    checkpoint = Path(path).resolve()
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
+    if not is_rma_run(checkpoint):
+        raise ValueError(f"{checkpoint} is not a V8 ROA run checkpoint")
+    return checkpoint
 
 
-def _parser(resume):
+def train(argv: list[str]) -> int:
+    """ROA teacher from scratch, or (--roa_from) a continuation of a ROA run in a new run: weights, critic and the
+    paired HOMIE velocity estimator from that checkpoint, phi fitted every update, lambda / H schedules from its global
+    iteration."""
+    _reject_alternate_profiles(argv)
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--level", type=int, choices=range(18))
     parser.add_argument("--no_randomization", action="store_true")
-    parser.add_argument("--checkpoint", help="V8 high-level checkpoint; older schemas are rejected")
-    parser.add_argument("--load_run", help="V8 run name or regex")
+    parser.add_argument("--roa", action="store_true", help=argparse.SUPPRESS)     # accepted: the only V8 teacher
+    parser.add_argument("--roa_from", help="continue a ROA run from this checkpoint in a new run")
     parser.add_argument("--experiment_name", default=EXPERIMENT)
-    if resume:
-        parser.add_argument("--resume", action="store_true")
-        parser.add_argument("--init_weights", action="store_true",
-                            help="with --checkpoint: a new run with the CURRENT V8 configuration, initialised from that "
-                                 "checkpoint's network / optimizer (no saved-configuration restore)")
-    return parser
-
-
-def _environment_args(options, args):
+    options, args = parser.parse_known_args(argv)
+    _validate_experiment(options.experiment_name)
     if options.level is not None:
         args.append(f"env.curriculum_level={options.level}")
     if options.no_randomization:
         args.append("env.enable_randomization=false")
-    args.extend(["--task", TASK_ID, "--experiment_name", options.experiment_name])
+    args.extend(["--task", TEACHER_ROA_TASK_ID, "--experiment_name", options.experiment_name])
+    if options.roa_from:
+        import torch
+        import yaml
+        src = _rma_checkpoint(options.roa_from)
+        it = int(torch.load(str(src), map_location="cpu", weights_only=False).get("iter", 0))
+        src_agent = yaml.load((src.parent / "params/agent.yaml").read_text(encoding="utf-8"), Loader=yaml.FullLoader) or {}
+        it += int((src_agent.get("algorithm") or {}).get("start_update", 0) or 0)      # global iteration
+        args.extend([f"agent.algorithm.init_checkpoint='{src.as_posix()}'", f"agent.algorithm.start_update={it}",
+                     "agent.algorithm.adapt_every_update=true"])
+        args.extend(_hv_override(src))                # its fine-tuned HOMIE velocity estimator (still training)
+        args.extend(o for o in _roa_source_overrides(src) if o not in args)
+        print(f"[pushcart-v8] ROA continuation from {src} (iteration {it})", flush=True)
+    return _run(_lab_scripts() / "train.py", args)
 
 
-def train(argv: list[str]) -> int:
-    _reject_alternate_profiles(argv)
-    parser = _parser(resume=True)
-    options, args = parser.parse_known_args(argv)
-    _validate_experiment(options.experiment_name)
-    _environment_args(options, args)
-    checkpoint = None
-    if options.checkpoint or options.resume:
-        model_pattern, run_pattern = _selection_patterns(options, args)
-        checkpoint = _resolve_checkpoint(model_pattern, run_pattern, options.experiment_name)
-        args.extend(_checkpoint_args(checkpoint, resume_flag=True, experiment=options.experiment_name))
-    elif options.load_run:
-        parser.error("--load_run requires --resume or --checkpoint")
-    if options.init_weights and checkpoint is None:
-        parser.error("--init_weights requires --checkpoint")
-    restore = None if options.init_weights else checkpoint
-    if options.init_weights:
-        print(f"[pushcart-v8] new run with the current configuration, weights from {checkpoint}", flush=True)
-        args.extend(_hv_override(checkpoint))
-    return _run(_lab_scripts() / "train.py", args, restore_checkpoint=restore)
-
-
-def play(argv: list[str]) -> int:
-    _reject_alternate_profiles(argv)
-    options, args = _parser(resume=False).parse_known_args(argv)
-    _validate_experiment(options.experiment_name)
-    _environment_args(options, args)
-    model_pattern, run_pattern = _selection_patterns(options, args)
-    checkpoint = _resolve_checkpoint(model_pattern, run_pattern, options.experiment_name)
-    args.extend(_checkpoint_args(checkpoint, resume_flag=False, experiment=options.experiment_name))
-    return _run(_lab_scripts() / "play.py", args, restore_checkpoint=checkpoint)
-
-
-STUDENT_TASK_ID = "Homie-G1-PushCart-V8-Student-Direct-v0"
-
-
-def distill(argv: list[str]) -> int:
-    """Phase 2: distil a V8 teacher checkpoint into the student (current V8 configuration, 32-frame history).
-
-    pushcart_v8.py distill --teacher <logs/rsl_rl/homie_pushcart_v8/<run>/model_N.pt> [--num_envs ...]
-    """
+def adapt(argv: list[str]) -> int:
+    """RMA phase 2 (default): train only the adaptation module on the student's own rollouts (every rollout acts on
+    z_phi; base policy, encoder and critic frozen). --student_rl: PPO fine-tuning of the deployable network (phi and
+    the input statistics frozen, privileged critic). Both run on the source run's environment (arm randomisation kept)
+    and its HOMIE velocity estimator (frozen)."""
     _reject_alternate_profiles(argv)
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--teacher", required=True, help="V8 teacher checkpoint (phase 1 run)")
-    parser.add_argument("--level", type=int, choices=range(18))
+    parser.add_argument("--checkpoint", required=True, help="ROA teacher (phase 2) or phase-2 (student RL) checkpoint")
+    parser.add_argument("--student_rl", action="store_true",
+                        help="PPO fine-tuning of the deployable student instead of phase 2")
+    parser.add_argument("--level", type=int, choices=range(18), default=17)
     parser.add_argument("--experiment_name", default=EXPERIMENT)
     options, args = parser.parse_known_args(argv)
     _validate_experiment(options.experiment_name)
-    teacher = Path(options.teacher).resolve()
-    if not teacher.is_file():
-        raise FileNotFoundError(teacher)
-    _saved_configs(teacher)                         # must be a V8 teacher run (actor / PPO / observation contract)
-    if options.level is not None:
-        args.append(f"env.curriculum_level={options.level}")
-    args.extend(["--task", STUDENT_TASK_ID, "--experiment_name", options.experiment_name])
-    # The runner loads the teacher from this RL checkpoint (actor_state_dict -> teacher only, iteration 0); the
-    # student configuration is the current one (no saved-configuration restore).
-    args.extend(_checkpoint_args(teacher, resume_flag=True, experiment=options.experiment_name))
-    # the student runs on the teacher's HOMIE (fine-tuned velocity estimator, frozen during distillation)
-    args.extend(_hv_override(teacher, train=False))
-    print(f"[pushcart-v8] distilling teacher {teacher}", flush=True)
-    return _run(_lab_scripts() / "train.py", args, restore_checkpoint=None)
+    checkpoint = _rma_checkpoint(options.checkpoint)
+    args.extend([f"env.curriculum_level={options.level}", "--task", TEACHER_ROA_TASK_ID,
+                 "--experiment_name", options.experiment_name])
+    args.extend(_hv_override(checkpoint, train=False))
+    args.extend(o for o in _roa_source_overrides(checkpoint) if o not in args)
+    lr = task_cfg_from_run(checkpoint, verbose=False).v8.leg_residual
+    args.extend([f"env.task.v8.leg_residual.mode={lr.mode}", f"env.task.v8.leg_residual.range={lr.range}",
+                 f"env.task.v8.leg_residual.clip={lr.clip}", f"env.task.v8.leg_residual.filter_tau_s={lr.filter_tau_s}",
+                 f"agent.algorithm.init_checkpoint='{checkpoint.as_posix()}'"])
+    if options.student_rl:
+        args.extend(["agent.algorithm.student_rl=true", "agent.algorithm.learning_rate=0.0001",
+                     "agent.algorithm.entropy_coef=0.0"])
+        print(f"[pushcart-v8] student RL from {checkpoint}", flush=True)
+    else:
+        args.append("agent.algorithm.adapt_only=true")
+        print(f"[pushcart-v8] RMA phase 2 (adaptation module) from {checkpoint}", flush=True)
+    return _run(_lab_scripts() / "train.py", args)

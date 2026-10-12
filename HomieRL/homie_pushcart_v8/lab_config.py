@@ -1,4 +1,5 @@
-"""Isaac Lab registration configs for the V8 teacher (phase 1): V3.2 runner / PPO values, V8 observation groups."""
+"""Isaac Lab registration configs for V8: the environment, the V3.2 runner / PPO values and the ROA teacher / RMA
+student model and algorithm (rma_policy.py). Phase 2 and student RL reuse the ROA task with algorithm overrides."""
 from copy import deepcopy
 
 from isaaclab.envs import DirectRLEnvCfg
@@ -65,8 +66,9 @@ class TeacherActorCfg(RslRlMLPModelCfg):
     class_name = "homie_pushcart_v8.teacher_policy:TeacherActor"
     latent_dim = 24
     encoder_hidden_dims = [128, 64]
-    leg_gate_init = 0.1
-    leg_init_std = 0.05
+    leg_gate_init = 1.0                           # tanh residual (2026-10-09): fixed output gate, bound by 0.3 * tanh(u)
+    leg_gate_learnable = False
+    leg_init_std = 0.1                            # in u: applied ~ 0.3 * 0.1 = 0.03 HOMIE action units at u = 0
 
 
 def _model_cfg(name, cls):
@@ -104,64 +106,59 @@ class TeacherRunnerCfg(RslRlOnPolicyRunnerCfg):
     algorithm = _algorithm_cfg()
 
 
-# ---------------------------------------------------------------------------------------------------- phase 2: student
-from isaaclab_rl.rsl_rl import RslRlDistillationAlgorithmCfg, RslRlDistillationRunnerCfg  # noqa: E402
-
-_STUDENT_TASK = PushCartTaskCfg()
-_STUDENT_TASK.v8.emit_history = True              # the 32-frame deployable history for the adaptation module
-
-
-@configclass
-class StudentEnvCfg(PushCartEnvCfg):
-    task: dict = config_dict(_STUDENT_TASK)
+# ---------------------------------------------------------------------------------------------------- ROA teacher / RMA student
+_ROA_TASK = PushCartTaskCfg()
+_ROA_TASK.v8.emit_history = True                  # the adaptation module trains alongside the teacher (ROA)
+_ROA_TASK.v8.upper_drive.mode = "explicit"         # V8.1: upper body as the legs / MuJoCo / robot (Unitree gains)
+_ROA_TASK.v8.arm_drive.enabled = True              # V8.1: arm-drive randomisation from the start (V8.0: from 6000)
+_ROA_TASK.v8.arm_drive.scale_range = [0.8, 1.2]    # V8.1: explicit PD matches MuJoCo / robot, so the wide 0.5-2 (needed
+                                                   # for V8.0's implicit-vs-explicit gap; cost the teacher at 0 kg) shrinks
 
 
 @configclass
-class StudentActorCfg(RslRlMLPModelCfg):
-    class_name = "homie_pushcart_v8.student_policy:StudentActor"
-    latent_dim = 24
-    freeze_body = True                            # RMA / SteadyTray phase 2: only the adaptation module learns
+class ROATeacherEnvCfg(PushCartEnvCfg):
+    task: dict = config_dict(_ROA_TASK)
+
+
+@configclass
+class RMATeacherActorCfg(RslRlMLPModelCfg):
+    class_name = "homie_pushcart_v8.rma_policy:RMATeacherActor"
+    latent_dim = 20                               # ROA / Extreme Parkour latent size
+    encoder_hidden_dims = [256, 128]              # RMA environment-factor encoder
+    leg_gate_init = 1.0
+    leg_gate_learnable = False
+    leg_init_std = 0.1
     adaptation_channels = 64
+    velocity_head = True                          # V8.1: phi also estimates cart vx/vy/wz, robot vx/vy (diagnostics)
 
 
 @configclass
-class V8DistillationAlgorithmCfg(RslRlDistillationAlgorithmCfg):
-    class_name = "homie_pushcart_v8.distillation:V8Distillation"
-    num_learning_epochs = 2
-    learning_rate = 5.0e-4
-    gradient_length = 1                           # one optimizer step per stored time step (4096 rows)
-    max_grad_norm = 1.0
-    loss_type = "mse"
-    explicit_weight = 1.0
-    latent_weight = 1.0
-    dagger_std = 0.05                             # exploration noise of the student while it drives (DAgger)
-    hl_clip = 1.0                                 # behaviour loss on the applied actions (task actions.clip)
-    leg_clip = 0.2                                # (v8.leg_residual.clip)
+class V8ROAPPOCfg(RslRlPpoAlgorithmCfg):
+    class_name = "homie_pushcart_v8.rma_policy:V8ROAPPO"
+    roa_lambda_max: float = 0.1                   # V8.1: 0 -> 0.1 over 3000-5000, then 0.1 (cap = Extreme Parkour's;
+    roa_start: int = 3000                         # ROA's appendix ramps to 1 over 5000-10000, which degraded the
+    roa_ramp: int = 2000                          # V8.0 teacher above ~0.12)
+    adapt_interval: int = 20                      # H: every 20th rollout acts on z_phi and only phi is updated
+    adapt_lr: float = 5.0e-4
+    adapt_only: bool = False                      # True = RMA phase 2 (base policy / encoder frozen)
+    adapt_std: float = 0.05                       # phase 2 rollout exploration
+    init_checkpoint: str = ""                     # phase 2 / continuation: a trained ROA run checkpoint
+    adapt_every_update: bool = True               # also fit phi on every privileged rollout (measured need, 2026-10-11)
+    start_update: int = 0                         # continuation: the checkpoint's iteration (lambda / H schedule)
+    student_rl: bool = False                      # PPO fine-tuning of the deployable student (phi frozen)
+    student_std: float = 0.2                      # its exploration std
+    velocity_loss_coef: float = 1.0               # weight of the velocity head's supervision (if the actor has it)
 
 
-def _student_model_cfg():
-    saved = deepcopy(_SAVED_AGENT["actor"])
+def _roa_algorithm_cfg():
+    saved = deepcopy(_SAVED_AGENT["algorithm"])
     saved.pop("class_name")
-    dist = dict(saved["distribution_cfg"])
-    dist["init_std"] = 0.05
-    saved["distribution_cfg"] = RslRlMLPModelCfg.GaussianDistributionCfg(**dist)
-    return StudentActorCfg(**saved)
+    saved["entropy_coef"] = 0.005                  # as the first V8 teacher
+    return V8ROAPPOCfg(**saved)
 
 
 @configclass
-class StudentRunnerCfg(RslRlDistillationRunnerCfg):
-    seed = _SAVED_AGENT["seed"]
-    device = _SAVED_AGENT["device"]
-    num_steps_per_env = _SAVED_AGENT["num_steps_per_env"]
-    max_iterations = 3000
-    save_interval = 200
-    experiment_name = EXPERIMENT
-    run_name = ""
-    logger = _SAVED_AGENT["logger"]
-    obs_groups = {"student": ["policy", "history"], "teacher": ["policy", "privileged"]}
-    clip_actions = _SAVED_AGENT["clip_actions"]
-    check_for_nan = _SAVED_AGENT["check_for_nan"]
-    student = _student_model_cfg()
-    teacher = _model_cfg("actor", TeacherActorCfg)
-    algorithm = V8DistillationAlgorithmCfg()
-    policy = None
+class ROATeacherRunnerCfg(TeacherRunnerCfg):
+    obs_groups = {"actor": ["policy", "privileged", "history"], "critic": ["critic"]}
+    actor = _model_cfg("actor", RMATeacherActorCfg)
+    algorithm = _roa_algorithm_cfg()

@@ -1,9 +1,11 @@
-"""V8 teacher Actor (RMA-style phase 1): privileged encoder -> latent z; the policy body sees the deployable 5-frame
-history, the explicit physical context and z. The student (phase 2) keeps this body and replaces (explicit, z) by an
-adaptation module over the deployable 32-frame history.
+"""V8 teacher Actor base: privileged encoder -> latent z, policy MLP with the gated leg residual. The first V8 teacher
+(retired) also fed the 19 explicit truths to the body; the final V8 teacher (rma_policy.RMATeacherActor) subclasses this
+class and sees the privileged information only through z.
 
-Leg residual (last 12 outputs): the MLP rows are zero-initialised and multiplied by a learnable gate (0.1 at start, as
-SteadyTray's residual adapters), so training starts from HOMIE exactly; their exploration std starts at 0.05.
+Leg residual (last 12 outputs u): the MLP rows are zero-initialised, so training starts from HOMIE exactly. The
+environment maps u to the applied residual (tanh mode: 0.3 * tanh(u), low-passed). The output gate is fixed at 1 in
+tanh mode; the first V8 teacher (clip mode) learned it from 0.1 (SteadyTray's residual-adapter start) and it grew to
+1.38 while u drifted beyond the clip.
 """
 from __future__ import annotations
 
@@ -23,9 +25,9 @@ TEACHER_SCHEMA = "v8_teacher_policy630_priv62_explicit19_latent24_act30_v2"
 class LegGate(nn.Module):
     """Multiplies the leg-residual outputs by a learnable gate."""
 
-    def __init__(self, init: float = 0.1):
+    def __init__(self, init: float = 0.1, learnable: bool = True):
         super().__init__()
-        self.alpha = nn.Parameter(torch.tensor(float(init)))
+        self.alpha = nn.Parameter(torch.tensor(float(init)), requires_grad=bool(learnable))
 
     def forward(self, x):
         return torch.cat((x[..., :HL_ACTIONS], self.alpha * x[..., HL_ACTIONS:]), -1)
@@ -34,7 +36,7 @@ class LegGate(nn.Module):
 class TeacherActor(MLPModel):
     def __init__(self, obs, obs_groups, obs_set, output_dim, hidden_dims=(512, 256, 128), activation="elu",
                  obs_normalization=True, distribution_cfg=None, latent_dim=24, encoder_hidden_dims=(128, 64),
-                 leg_gate_init=0.1, leg_init_std=0.05):
+                 leg_gate_init=0.1, leg_init_std=0.05, leg_gate_learnable=True):
         if output_dim != ACTION_DIM:
             raise ValueError(f"V8 Actor outputs {ACTION_DIM} actions (18 high-level + 12 leg residual)")
         self.latent_dim = int(latent_dim)
@@ -46,7 +48,7 @@ class TeacherActor(MLPModel):
         with torch.no_grad():                    # leg residual starts at exactly zero
             last.weight[HL_ACTIONS:ACTION_DIM].zero_()
             last.bias[HL_ACTIONS:ACTION_DIM].zero_()
-        self.mlp = nn.Sequential(self.mlp, LegGate(leg_gate_init))
+        self.mlp = nn.Sequential(self.mlp, LegGate(leg_gate_init, leg_gate_learnable))
         dist = self.distribution
         if dist is not None:
             with torch.no_grad():
@@ -55,6 +57,7 @@ class TeacherActor(MLPModel):
                 elif hasattr(dist, "log_std_param"):
                     dist.log_std_param[HL_ACTIONS:] = torch.log(torch.tensor(leg_init_std))
         self.leg_init_std, self.leg_gate_init = float(leg_init_std), float(leg_gate_init)
+        self.leg_gate_learnable = bool(leg_gate_learnable)
 
     # observation layout ---------------------------------------------------------------------------------------
     def _get_obs_dim(self, obs, obs_groups, obs_set):
@@ -86,7 +89,8 @@ class TeacherActor(MLPModel):
     def metadata(self):
         return {"schema": TEACHER_SCHEMA, "release": "8.0", "policy": POLICY_DIM, "privileged": PRIVILEGED_DIM,
                 "explicit": EXPLICIT_DIM, "latent": self.latent_dim, "actions": ACTION_DIM,
-                "leg_actions": LEG_ACTIONS, "leg_gate_init": self.leg_gate_init, "leg_init_std": self.leg_init_std}
+                "leg_actions": LEG_ACTIONS, "leg_gate_init": self.leg_gate_init, "leg_init_std": self.leg_init_std,
+                "leg_gate_learnable": self.leg_gate_learnable}
 
     def as_jit(self):
         return _TeacherExport(self)
@@ -112,21 +116,6 @@ class _TeacherExport(nn.Module):
 
 
 def load_teacher(checkpoint, device="cpu"):
-    """Deterministic V8 teacher (policy 630, privileged 62 -> 30 actions) from a teacher run checkpoint."""
-    from pathlib import Path
-
-    import yaml
-    from tensordict import TensorDict
-    checkpoint = Path(checkpoint)
-    acfg = yaml.load((checkpoint.parent / "params/agent.yaml").read_text(encoding="utf-8"),
-                     Loader=yaml.FullLoader)["actor"]
-    probe = TensorDict({"policy": torch.zeros(2, POLICY_DIM), "privileged": torch.zeros(2, PRIVILEGED_DIM)},
-                       batch_size=[2])
-    actor = TeacherActor(probe, {"actor": ["policy", "privileged"]}, "actor", ACTION_DIM,
-                         **{k: v for k, v in acfg.items() if k != "class_name"})
-    loaded = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
-    actor.load_state_dict(loaded["actor_state_dict"])
-    export = actor.as_jit().to(device).eval()
-    export.iteration = loaded.get("iter")
-    export.leg_gate = float(actor.mlp[1].alpha)
-    return export
+    """Deterministic V8 ROA teacher (policy 630, privileged 62 -> 30 actions; simulation only)."""
+    from .rma_policy import load_rma
+    return load_rma(checkpoint, deploy=False, device=device)

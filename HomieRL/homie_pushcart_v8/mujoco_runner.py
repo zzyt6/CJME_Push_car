@@ -25,7 +25,8 @@ from homie_isaaclab.config import G1RoughCfg
 from homie_pushcart_v7.baseline import apply_config, homie_baseline
 from homie_pushcart_v7.physics import make_mujoco_env
 
-from .task_config import ACTION_DIM, FRAME_DIM, HL_ACTIONS, POLICY_HISTORY, PRIVILEGED_DIM, task_cfg_from_run
+from .task_config import (ACTION_DIM, FRAME_DIM, HL_ACTIONS, LONG_HISTORY, POLICY_HISTORY, PRIVILEGED_DIM, leg_residual_filter_alpha,
+                          leg_residual_map, task_cfg_from_run)
 
 
 class CameraYaw:
@@ -64,6 +65,7 @@ class MujocoV8Runner(MujocoHighLevelRunner):
         from homie_pushcart.hl_policy import import_rsl_rl5
         import_rsl_rl5()                                         # the V8 Actor classes need RSL-RL 5
         from .teacher_policy import load_teacher
+        from .student_policy import is_student_run, load_student
         from .training import homie_velocity_file
         from homie_pushcart_v7.interaction_policy import homie_encoder_from_checkpoint
         checkpoint = Path(checkpoint)
@@ -74,18 +76,29 @@ class MujocoV8Runner(MujocoHighLevelRunner):
         self.homie_checkpoint = Path(homie_checkpoint or frozen_checkpoint())
         low = HimLowLevelPolicy(self.homie_checkpoint, "cpu")
         self.v8 = task.v8
-        self.policy = hl_policy if hl_policy is not None else load_teacher(checkpoint)
+        # teacher run -> privileged teacher; distillation run -> deployable student (32-frame history)
+        self.student = hl_policy is None and is_student_run(checkpoint)
+        self.policy = hl_policy if hl_policy is not None else (load_student(checkpoint) if self.student
+                                                                else load_teacher(checkpoint))
         self.zero_leg_residual = bool(zero_leg_residual)
         # HOMIE input layer: the fine-tuned velocity estimator paired with this checkpoint
         self.hv, self.hv_path = None, None
         if task.v8.homie_velocity.enabled:
             path = Path(estimator) if estimator else homie_velocity_file(checkpoint)
+            if path is None and task.v8.homie_velocity.init_checkpoint:     # student run: the teacher's estimator
+                path = Path(task.v8.homie_velocity.init_checkpoint)
             if path is None:
                 raise FileNotFoundError(f"no homie_velocity_estimator for {checkpoint}")
             self.hv = homie_encoder_from_checkpoint(self.homie_checkpoint)
             self.hv.load_state_dict(torch.load(str(path), map_location="cpu", weights_only=False)["encoder"])
             self.hv.eval()
             self.hv_path = path
+        if task.v8.upper_drive.mode == "explicit":            # V8.1: the run's upper-body gains (MuJoCo PD is explicit)
+            from homie_pushcart.mujoco_env import HOMIE_JOINTS
+            from .task_config import upper_drive_gains
+            lower = env.num_lower
+            kp, kd = upper_drive_gains(task, HOMIE_JOINTS[lower:])
+            env.p_gains[lower:], env.d_gains[lower:] = kp, kd
         self.camera = CameraYaw(task.v8.camera, camera_noise)
         self.seed = 0
         super().__init__(env, low, None, task, level)
@@ -118,8 +131,12 @@ class MujocoV8Runner(MujocoHighLevelRunner):
     def reset_buffers(self):
         super().reset_buffers()
         self.leg_residual = np.zeros(12)
+        self.leg_raw = np.zeros(12)
         self.homie_leg_actions = np.zeros(12)
         self.frames = np.zeros((POLICY_HISTORY, FRAME_DIM), dtype=np.float32)
+        self.frames_long = np.zeros((LONG_HISTORY, FRAME_DIM), dtype=np.float32)
+        self.history_obs = np.zeros(LONG_HISTORY * FRAME_DIM, dtype=np.float32)
+        self.explicit_est = np.zeros(19, dtype=np.float32)
         self.privileged = np.zeros(PRIVILEGED_DIM, dtype=np.float32)
         self.slip_v = np.zeros(2)
         self.episode_step = 0
@@ -150,15 +167,20 @@ class MujocoV8Runner(MujocoHighLevelRunner):
         hl_on = self.hl is not None                              # viewers switch the high level off (= HOMIE passthrough)
         if hl_on:
             with torch.inference_mode():
+                second = self.history_obs if self.student else self.privileged
                 out = self.policy(torch.from_numpy(self.hl_obs).unsqueeze(0),
-                                  torch.from_numpy(self.privileged).unsqueeze(0))[0].numpy()
+                                  torch.from_numpy(second).unsqueeze(0))[0].numpy()
+                if self.student:                                 # diagnostics: estimate vs MuJoCo truth
+                    self.explicit_est = self.policy.explicit(torch.from_numpy(self.history_obs).unsqueeze(0))[0].numpy()
         else:
             out = np.zeros(ACTION_DIM, dtype=np.float32)
         a = np.clip(out[:HL_ACTIONS], -tc.actions.clip, tc.actions.clip)
         lr = self.v8.leg_residual
-        self.leg_raw = out[HL_ACTIONS:ACTION_DIM].copy()          # network output before the clip (diagnostics)
+        self.leg_raw = out[HL_ACTIONS:ACTION_DIM].copy()          # network output u (diagnostics)
+        target = leg_residual_map(self.leg_raw, self.task_cfg)   # range * tanh(u) | clamp(u, +-clip), as in training
+        alpha = leg_residual_filter_alpha(self.task_cfg, self.dt)
         self.leg_residual = (np.zeros(12) if (self.zero_leg_residual or not lr.enabled)
-                             else np.clip(out[HL_ACTIONS:ACTION_DIM], -lr.clip, lr.clip))
+                             else self.leg_residual + alpha * (target - self.leg_residual))
         self.hl_actions = a
         target = np.clip(self.cmd_ref + gate * a[:3] * self.residual_scale, self.cmd_lo, self.cmd_hi)
         self.cmd_homie = self.cmd_homie + self.cmd_alpha * (target - self.cmd_homie)
@@ -181,6 +203,14 @@ class MujocoV8Runner(MujocoHighLevelRunner):
         self.homie_leg_actions = legs
         anchor_prev = None if self.grasp.anchor is None else self.grasp.anchor.copy()
         self._obs, fallen = env.step(legs + self.leg_residual)
+        if getattr(self, "obs_noise", False):
+            # the Isaac training noise (homie_isaaclab task_core._get_noise_scale_vec, add_noise, level 1): uniform on
+            # each new HOMIE frame -- ang vel 0.5*0.5, gravity 0.05, joint pos 0.02, joint vel 2.0*0.05
+            if not hasattr(self, "_noise_vec"):
+                v = np.zeros(env.obs_hist.shape[1], dtype=np.float32)
+                v[4:7], v[7:10], v[10:37], v[37:64] = 0.25, 0.05, 0.02, 0.1
+                self._noise_vec, self._noise_rng = v, np.random.default_rng(20_000 + int(self.seed))
+            env.obs_hist[-1] += ((2 * self._noise_rng.random(self._noise_vec.shape) - 1) * self._noise_vec).astype(np.float32)
         self.grasp.update(self.grasp.hand_loads())               # elasto-plastic slide for the next step
         self.casters.update()                                    # swivel scrub fading with rolling speed
         self.slip_v = np.zeros(2) if anchor_prev is None else (self.grasp.anchor - anchor_prev) / self.dt
@@ -241,14 +271,21 @@ class MujocoV8Runner(MujocoHighLevelRunner):
         if not hasattr(self, "camera") or not hasattr(self, "leg_residual"):
             return
         legacy = self.actor_hist[-1]
-        frame = np.concatenate((legacy[0:79], legacy[80:95], [self.camera(self.ts["rel_yaw"])],
+        tau = legacy[80:95] + getattr(self, "tau_obs_offset", 0.0)        # optional diagnostic bias of the torque obs
+        if getattr(self, "obs_noise", False) and hasattr(self, "_noise_rng"):  # Isaac: x (1 + 0.05 U(-1, 1))
+            tau = tau * (1. + 0.05 * (2 * self._noise_rng.random(15) - 1))
+        frame = np.concatenate((legacy[0:79], tau, [self.camera(self.ts["rel_yaw"])],
                                 self.hl_actions, self.leg_residual, legacy[123:124])).astype(np.float32)
         assert frame.shape[0] == FRAME_DIM, frame.shape
         if fresh:
             self.frames[:] = 0.
+            self.frames_long[:] = 0.
         else:
             self.frames = np.roll(self.frames, -1, axis=0)
+            self.frames_long = np.roll(self.frames_long, -1, axis=0)
         self.frames[-1] = frame
+        self.frames_long[-1] = frame
         clip = self.env.clip_obs
         self.hl_obs = np.clip(self.frames.reshape(-1), -clip, clip).astype(np.float32)
+        self.history_obs = np.clip(self.frames_long.reshape(-1), -clip, clip).astype(np.float32)
         self.privileged = self._privileged_v8()
