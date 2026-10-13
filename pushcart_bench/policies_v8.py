@@ -12,12 +12,16 @@ import numpy as np
 from .policies import CartPolicyBase
 
 
-V8_FINAL_STUDENT = "logs/rsl_rl/homie_pushcart_v8/2026-10-12_07-56-35_v8_fp_rl_armdr800/model_200.pt"
+V8_FINAL_STUDENT = "logs/rsl_rl/homie_pushcart_v8/2026-10-13_04-57-30_v8_fp_p2_v81m6000/model_299.pt"   # V8.1
+V8_0_FINAL_STUDENT = "logs/rsl_rl/homie_pushcart_v8/2026-10-12_07-56-35_v8_fp_rl_armdr800/model_200.pt"
 
 
 def resolve_v8_checkpoint(checkpoint="latest"):
-    """A V8 checkpoint path; "latest" / "final" = the released V8 student (docs/push_cart_v8_teacher_student_plan.md)."""
+    """A V8 checkpoint path; "latest" / "final" = the released V8.1 student, "v8.0" = the V8.0 student
+    (docs/push_cart_v8_teacher_student_plan.md, sections 11-12)."""
     from homie_pushcart.paths import ROOT
+    if str(checkpoint) == "v8.0":
+        return ROOT / V8_0_FINAL_STUDENT
     if str(checkpoint) not in ("latest", "final"):
         path = Path(checkpoint)
         if not path.is_file():
@@ -43,8 +47,11 @@ class V8Policy(CartPolicyBase):
         self.env = self.runner.env
         self.homie_checkpoint = self.runner.homie_checkpoint
         self.dt, self.level, self.hl_checkpoint = self.env.dt, level, checkpoint
-        tag = "V8 学生" if self.runner.student else "V8"
+        ud = self.runner.task_cfg.v8.upper_drive
+        self.release = "V8.1" if ud.mode == "explicit" else "V8.0"
+        tag = f"{self.release} {'学生' if self.runner.student else '教师'}"
         self.name = name or (f"{tag} · {checkpoint.parent.name}/{checkpoint.stem}" + (" · legres0" if zero_leg_residual else ""))
+        self.velocity_head = bool(self.runner.student and getattr(self.runner.policy, "velocity_head", False))
         self.est_err = []
         m = self.env.model
         self.cart_body = self.runner.cart_body
@@ -82,7 +89,14 @@ class V8Policy(CartPolicyBase):
     def describe(self):
         from homie_pushcart_v7.physics import physics_manifest
         out = super().describe()
-        out.update(kind="v8_student" if self.runner.student else "v8_teacher", version=8, physics=physics_manifest(),
+        ud = self.runner.task_cfg.v8.upper_drive
+        physics = physics_manifest()
+        if ud.mode == "explicit":                       # V8.1: the run's upper-body drive, not V3.2's implicit one
+            physics["isaac_drive"] = "V8.1: leg explicit PD effort (HOMIE gains), upper explicit PD effort (Unitree gains)"
+            physics["mujoco_drive"] = "all-joint explicit PD every physics step; upper body with the run's Unitree gains"
+        out.update(release=self.release, upper_drive={"mode": ud.mode, "kp": dict(ud.kp), "kd": dict(ud.kd)},
+                   velocity_head=self.velocity_head)
+        out.update(kind="v8_student" if self.runner.student else "v8_teacher", version=8, physics=physics,
                    policy_input=630, privileged_input=0 if self.runner.student else 62,
                    history_input=4032 if self.runner.student else 0,
                    homie_velocity_estimator=str(self.runner.hv_path), leg_residual=not self.runner.zero_leg_residual,
@@ -98,4 +112,17 @@ class V8Policy(CartPolicyBase):
                     "leg_raw_abs": float(np.abs(r.leg_raw).mean()),
                     "homie_vel_tuned": r.vel_est.tolist(), "homie_vel_original": r.vel_est_homie.tolist(),
                     "camera_yaw": float(r.frames[-1, 94])})
+        if self.velocity_head:
+            # V8.1 velocity head (privileged units: cart vx, vy x2, wz x0.5; robot v x2) -> the bench plots' estimate
+            e = r.explicit_est
+            out.update({"cart_est_vx": float(e[0]) / 2.0, "cart_est_vy": float(e[1]) / 2.0,
+                        "cart_est_wz": float(e[2]) / 0.5, "robot_est_vx": float(e[4]) / 2.0,
+                        "robot_est_vy": float(e[5]) / 2.0})
+            bv = self.env.base_lin_vel
+            out["status_line"] = (f"- {self.release} 学生 · 速度头估计 机器人 vx {e[4] / 2:+.2f} (真 {bv[0]:+.2f}) "
+                                  f"vy {e[5] / 2:+.2f} (真 {bv[1]:+.2f}) m/s · 上肢 {self.runner.task_cfg.v8.upper_drive.mode} PD")
+        elif self.runner.student:
+            out["status_line"] = f"- {self.release} 学生（无速度头）· 上肢 {self.runner.task_cfg.v8.upper_drive.mode} PD"
+        else:
+            out["status_line"] = f"- {self.release} 教师（读特权真值，仅仿真）· 上肢 {self.runner.task_cfg.v8.upper_drive.mode} PD"
         return out

@@ -9,10 +9,11 @@ description = "HOMIE G1 task and HIM-PPO for the Isaac Lab 3 training entrypoint
 requires-python = ">=3.12,<3.13"
 
 [tool.setuptools]
-packages = ["homie_isaaclab", "homie_hand_force", "homie_rsl_rl", "homie_rsl_rl.algorithms", "homie_rsl_rl.modules", "homie_rsl_rl.storage", "homie_rsl_rl.utils", "homie_pushcart", "homie_pushcart.assets", "homie_pushcart_v6"]
+packages = ["homie_isaaclab", "homie_isaaclab_v2", "homie_hand_force", "homie_rsl_rl", "homie_rsl_rl.algorithms", "homie_rsl_rl.modules", "homie_rsl_rl.storage", "homie_rsl_rl.utils", "homie_pushcart", "homie_pushcart.assets", "homie_pushcart_v6"]
 
 [tool.setuptools.package-dir]
 homie_isaaclab = "HomieRL/homie_isaaclab"
+homie_isaaclab_v2 = "HomieRL/homie_isaaclab_v2"
 homie_hand_force = "HomieRL/homie_hand_force"
 homie_rsl_rl = "HomieRL/rsl_rl/rsl_rl"
 homie_pushcart = "HomieRL/homie_pushcart"

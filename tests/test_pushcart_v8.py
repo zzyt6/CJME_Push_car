@@ -224,5 +224,33 @@ class FinalModelTests(unittest.TestCase):
         self.assertEqual(homie_velocity_file(FINAL_TEACHER).name, "homie_velocity_estimator_6800.pt")
 
 
+V81_STUDENT = FINAL / "2026-10-13_04-57-30_v8_fp_p2_v81m6000/model_299.pt"
+V81_TEACHER = FINAL / "2026-10-12_20-52-19_v8_1_roa_teacher_8k/model_6000.pt"
+
+
+@unittest.skipUnless(V81_STUDENT.is_file() and V81_TEACHER.is_file(), "V8.1 checkpoints not present")
+class V81ModelTests(unittest.TestCase):
+    def test_v81_student_teacher_and_settings(self):
+        from homie_pushcart.hl_policy import import_rsl_rl5
+        import_rsl_rl5()
+        from homie_pushcart_v8.student_policy import is_student_run, load_student
+        from homie_pushcart_v8.task_config import task_cfg_from_run
+        from homie_pushcart_v8.teacher_policy import load_teacher
+        from homie_pushcart_v8.training import homie_velocity_file
+        from pushcart_bench.policies_v8 import resolve_v8_checkpoint
+        self.assertTrue(is_student_run(V81_STUDENT))
+        s, t = load_student(V81_STUDENT), load_teacher(V81_TEACHER)
+        with torch.no_grad():
+            self.assertEqual(s(torch.zeros(2, 630), torch.zeros(2, 4032)).shape, (2, 30))
+            self.assertEqual(t(torch.zeros(2, 630), torch.zeros(2, 62)).shape, (2, 30))
+            self.assertTrue(s.velocity_head)
+            self.assertEqual(s.explicit(torch.zeros(2, 4032)).shape, (2, 19))
+        v8 = task_cfg_from_run(V81_STUDENT, verbose=False).v8
+        self.assertEqual((v8.upper_drive.mode, list(v8.arm_drive.scale_range), v8.arm_drive.enabled),
+                         ("explicit", [0.8, 1.2], True))
+        self.assertEqual(homie_velocity_file(V81_STUDENT).name, "homie_velocity_estimator_6000.pt")
+        self.assertEqual(Path(resolve_v8_checkpoint("latest")).resolve(), V81_STUDENT.resolve())
+
+
 if __name__ == "__main__":
     unittest.main()
