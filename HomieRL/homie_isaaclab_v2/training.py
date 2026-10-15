@@ -23,7 +23,7 @@ def train(argv):
     parser.add_argument("--rl_device")
     parser.add_argument("--sim_device")
     parser.add_argument("--checkpoint")
-    parser.add_argument("--experiment_name", default="homie_g1_v2")
+    parser.add_argument("--experiment_name")
     options, args = parser.parse_known_args(argv)
     if options.no_randomization:
         args.append("env.enable_randomization=false")
@@ -31,8 +31,12 @@ def train(argv):
         args.extend(["--device", options.sim_device])
     if options.rl_device:
         args.append(f"agent.device={options.rl_device}")
-    task = "Homie-G1-V2-Direct-v0" if options.task == "g1" else options.task
-    args.extend(["--task", task, "--experiment_name", options.experiment_name])
+    aliases = {"g1": "Homie-G1-V2-Direct-v0", "balance": "Homie-G1-V2-Balance-Direct-v0"}
+    task = aliases.get(options.task, options.task)
+    experiment = options.experiment_name or (
+        "homie_g1_v2_balance" if task == aliases["balance"] else "homie_g1_v2")
+    options.experiment_name = experiment
+    args.extend(["--task", task, "--experiment_name", experiment])
     if options.checkpoint:
         checkpoint = options.checkpoint
         source = Path(checkpoint).expanduser()

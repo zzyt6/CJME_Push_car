@@ -92,3 +92,19 @@ class HomieRunnerCfg(RslRlBaseRunnerCfg):
     # not be translated into the standard RSL-RL MLP actor (which lacks HIM).
     him_policy: dict = class_to_dict(_TRAIN.policy)
     algorithm: HomieAlgorithmCfg = HomieAlgorithmCfg()
+
+
+_BALANCE = G1RoughCfg()
+_BALANCE.balance.enabled = True
+
+
+@configclass
+class HomieBalanceEnvCfg(HomieDirectEnvCfg):
+    """Stand-still model, fine-tuned from the walking model (see G1RoughCfg.balance)."""
+    homie: dict = class_to_dict(_BALANCE)
+
+
+@configclass
+class HomieBalanceRunnerCfg(HomieRunnerCfg):
+    experiment_name = "homie_g1_v2_balance"
+    max_iterations = 3000

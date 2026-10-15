@@ -45,6 +45,11 @@ class HomieIsaacLabEnv(HomieTaskCore):
         self.actor_proprioceptive_obs_length = self.num_obs
         self.critic_proprioceptive_obs_length = self.num_privileged_obs
         self.sim_params = SimpleNamespace(dt=cfg.sim.dt)
+        if cfg.balance.enabled:
+            for name, scale in cfg.balance.reward_scales.items():
+                setattr(cfg.rewards.scales, name, scale)
+            cfg.domain_rand.max_push_vel_xy = cfg.balance.max_push_vel_xy
+            cfg.domain_rand.init_upper_ratio = cfg.balance.upper_ratio
         self._parse_cfg(cfg)
         self.max_episode_length = int(self.max_episode_length)
         self.custom_origins = False
@@ -206,6 +211,7 @@ class HomieIsaacLabEnv(HomieTaskCore):
         self._sync_states()
         self._init_task_buffers()
         self._prepare_reward_function()
+        self._init_balance(project_root)
         self.joint_pos_target = self.default_dof_pos.repeat(self.num_envs, 1)
         self._randomize_body_properties()
         self._material_buckets = torch.empty(64, 3)
@@ -214,6 +220,96 @@ class HomieIsaacLabEnv(HomieTaskCore):
         print(f'[HOMIE] {self.num_envs} envs, {len(self.dof_names)} joints, {self.num_bodies} bodies; actor=456 critic=79 action=12')
         print(f'[HOMIE] Lab joint IDs in original policy order: {self.joint_ids.tolist()}')
         self.physics_report = self._physics_report()
+
+    def _init_balance(self, project_root):
+        """Stage-2 grasp stance and walk-to-stop switch states for the balance model."""
+        self._bank = None
+        b = self.cfg.balance
+        if not b.enabled:
+            return
+        import yaml
+        robot = yaml.safe_load((project_root / b.stance_path).read_text(encoding='utf-8'))['robot']
+        self._stance_joint_pos = torch.tensor([robot['joint_pos'][n] for n in self.dof_names], device=self.device)
+        self._stance_root_pose = torch.tensor([*robot['base_pos'], *robot['base_quat_xyzw']], device=self.device)
+        # Arm hold target in action units (joint target = default + action_scale * action).
+        self._grasp_upper_actions = ((self._stance_joint_pos - self.default_dof_pos[0])
+                                     / self.cfg.control.action_scale)[self.num_lower_dof:]
+        if b.bank_ratio > 0:
+            path = project_root / b.bank_path
+            if not path.is_file():
+                raise FileNotFoundError(f'Balance switch bank missing: {path}. Record it with: run_homie_v2.ps1 bank')
+            self._bank = {k: v.to(self.device) for k, v in torch.load(path, map_location='cpu')['states'].items()}
+            print(f'[HOMIE] balance: {len(self._bank["obs"])} switch states from {path}', flush=True)
+
+    def _balance_reset_states(self, env_ids):
+        """Write the start state: a recorded walk-to-stop switch (bank_ratio) or the stage-2 grasp stance."""
+        b, n, ids = self.cfg.balance, len(env_ids), env_ids.long()
+        noise = torch_rand_float(-b.stance_joint_noise, b.stance_joint_noise, (n, self.num_dof), self.device)
+        pos = (self._stance_joint_pos + noise).clamp(self.dof_pos_limits[:, 0], self.dof_pos_limits[:, 1])
+        vel = torch.zeros_like(pos)
+        pose = self._stance_root_pose.repeat(n, 1)
+        root_vel = torch_rand_float(-b.stance_root_vel, b.stance_root_vel, (n, 6), self.device)
+        use_bank = torch.zeros(n, dtype=torch.bool, device=self.device)
+        index = torch.zeros(n, dtype=torch.long, device=self.device)
+        if self._bank is not None:
+            use_bank = torch.rand(n, device=self.device) < b.bank_ratio
+            index = torch.randint(len(self._bank['obs']), (n,), device=self.device)
+            k = index[use_bank]
+            pos[use_bank], vel[use_bank] = self._bank['joint_pos'][k], self._bank['joint_vel'][k]
+            pose[use_bank], root_vel[use_bank] = self._bank['root_pose'][k], self._bank['root_vel'][k]
+        pose[:, :3] += self.env_origins[ids]
+        self.robot.write_root_pose_to_sim_index(root_pose=pose, env_ids=env_ids)
+        self.robot.write_root_velocity_to_sim_index(root_velocity=root_vel, env_ids=env_ids)
+        self.robot.write_joint_position_to_sim_index(position=pos, joint_ids=self.joint_ids, env_ids=env_ids)
+        self.robot.write_joint_velocity_to_sim_index(velocity=vel, joint_ids=self.joint_ids, env_ids=env_ids)
+        self.robot.set_joint_position_target_index(target=pos, joint_ids=self.joint_ids, env_ids=env_ids)
+        return use_bank, index
+
+    def _balance_reset_buffers(self, env_ids, use_bank, index):
+        """Policy-side state at the start: arms holding the grasp, or the walking policy's buffers at the switch."""
+        ids = env_ids.long()
+        stance = ids[~use_bank]
+        for buf in (self.actions, self.last_actions, self.last_last_actions):
+            buf[stance, self.num_lower_dof:] = self._grasp_upper_actions
+        self.current_upper_actions[stance] = self._grasp_upper_actions
+        self.delta_upper_actions[stance] = 0.
+        switched, k = ids[use_bank], index[use_bank]
+        if not len(switched):
+            return
+        # The step after reset rolls actions into last_actions and last_actions into last_last_actions.
+        self.obs_buf[switched] = self._bank['obs'][k]
+        self.privileged_obs_buf[switched] = self._bank['critic_obs'][k]
+        self.actions[switched] = self._bank['actions'][k]
+        self.last_actions[switched] = self._bank['last_actions'][k]
+        self.current_upper_actions[switched] = self._bank['current_upper_actions'][k]
+        self.delta_upper_actions[switched] = self._bank['delta_upper_actions'][k]
+
+    def _reward_stance_height(self):
+        # Absolute pelvis height of the stage-2 grasp stance (flat ground), on a 5 mm scale. The
+        # feet-relative tracking_base_height puts a flat-footed stance 4 mm lower: the walking model's
+        # 0.759 m came with its stepping ankles at 0.0385 m, flat feet put them at 0.0353 m.
+        return torch.exp(-torch.square((self.root_states[:, 2] - self._stance_root_pose[2]) / .005))
+
+    def _reward_com_centering(self):
+        # Squared horizontal distance of the whole-body CoM from the middle of the two foot centres
+        # (mean of each foot's front/mid/hind sole markers): the stability margin of standing.
+        com = (self.robot.data.body_com_pos_w.torch * self._body_mass[..., None]).sum(1) / self._body_mass.sum(1, keepdim=True)
+        support = torch.stack((self.rigid_body_states[:, self.left_foot_indices, :2].mean(1),
+                               self.rigid_body_states[:, self.right_foot_indices, :2].mean(1)), 1).mean(1)
+        return torch.sum(torch.square(com[:, :2] - support), dim=1)
+
+    def _reward_pitch_band(self):
+        # Pelvis pitch outside the walking model's standing pitch +- band (linear in the excess): the
+        # switch from walking must not rotate the pelvis; inside the band the posture is free.
+        b = self.cfg.balance
+        return (torch.abs(self.pitch[:, 0] - b.pitch_ref) - b.pitch_band).clamp(min=0.)
+
+    def _reward_load_balance(self):
+        # Normal-force imbalance |F_l - F_r| / (F_l + F_r) while both feet carry load; unloading one
+        # foot is how a step starts.
+        force = self.contact_forces[:, self.feet_indices, 2].clamp(min=0.)
+        both = (force > 1.).all(dim=1)
+        return (force[:, 0] - force[:, 1]).abs() / (force.sum(1) + 1e-6) * both
 
     def _physics_report(self):
         """Capture effective physics properties as recommended by the migration guide."""
@@ -246,6 +342,11 @@ class HomieIsaacLabEnv(HomieTaskCore):
             'replicate_physics': self.scene.cfg.replicate_physics,
             'filter_collisions': self.scene.cfg.filter_collisions,
             'randomization': self.cfg.domain_rand.use_random,
+            'balance': {'enabled': self.cfg.balance.enabled,
+                        'switch_states': 0 if self._bank is None else len(self._bank['obs']),
+                        'max_push_vel_xy': self.cfg.domain_rand.max_push_vel_xy,
+                        'init_upper_ratio': self.action_curriculum_ratio,
+                        'reward_scales_per_s': {k: v / self.dt for k, v in self.reward_scales.items()}},
         }
 
     def _init_indices(self):
@@ -336,6 +437,8 @@ class HomieIsaacLabEnv(HomieTaskCore):
         # Negative masses from additive randomization are not valid PhysX inputs.
         masses = masses.clamp_min(.001)
         self.robot.set_masses_index(masses=masses)
+        # GPU copy for the whole-body CoM (reading body_mass copies PhysX's CPU masses on every access).
+        self._body_mass = masses.to(self.device)
         inertias = self.robot.data.body_inertia.torch.clone()
         scale = masses / original.clamp_min(.001)
         self.robot.set_inertias_index(inertias=inertias * scale.reshape(*scale.shape, *([1] * (inertias.ndim - scale.ndim))))
@@ -390,6 +493,7 @@ class HomieIsaacLabEnv(HomieTaskCore):
             return
         env_ids = env_ids.to(dtype=torch.int32)
         super().reset_idx(env_ids)
+        balance_start = self._balance_reset_states(env_ids) if self.cfg.balance.enabled else None
         self.scene.reset(env_ids)
         self.sim.forward()
         self.scene.update(0.)
@@ -402,6 +506,8 @@ class HomieIsaacLabEnv(HomieTaskCore):
         self.actions[env_ids] = 0.
         self.last_contacts[env_ids] = False
         self.feet_max_height[env_ids] = 0.
+        if balance_start is not None:
+            self._balance_reset_buffers(env_ids, *balance_start)
 
     def reset(self):
         self.reset_idx(torch.arange(self.num_envs, device=self.device))
@@ -421,7 +527,10 @@ class HomieIsaacLabEnv(HomieTaskCore):
             cfg.domain_rand, 'upper_body_randomization', False,
         )
         if not upper_randomization:
-            self.current_upper_actions.zero_()
+            if cfg.balance.enabled:
+                self.current_upper_actions[:] = self._grasp_upper_actions
+            else:
+                self.current_upper_actions.zero_()
             self.delta_upper_actions.zero_()
         elif self.common_step_counter % cfg.domain_rand.upper_interval == 0:
             ratio = min(self.action_curriculum_ratio, 1.)
@@ -431,6 +540,9 @@ class HomieIsaacLabEnv(HomieTaskCore):
             amplitude *= torch.rand_like(amplitude)
             choose_lower = torch.rand_like(amplitude) >= .5
             target = torch.where(choose_lower, self.action_min[:, 12:], self.action_max[:, 12:]) * amplitude
+            if cfg.balance.enabled:
+                hold = torch.rand(self.num_envs, 1, device=self.device) < cfg.balance.upper_hold_prob
+                target = torch.where(hold, self._grasp_upper_actions, target)
             self.delta_upper_actions = (target - self.current_upper_actions) / cfg.domain_rand.upper_interval
         self.current_upper_actions += self.delta_upper_actions
         self.actions = torch.cat((actions.to(self.device), self.current_upper_actions), -1).clamp(-cfg.normalization.clip_actions, cfg.normalization.clip_actions)

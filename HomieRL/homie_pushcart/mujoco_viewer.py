@@ -235,7 +235,14 @@ class TwoStageViewer:
 
     @staticmethod
     def _family_label(family):
-        return {"v6": "V6", "v7": "V7", "v8": "V8 教师"}.get(family, "V3 / 更早版本")
+        return {"v6": "V6", "v7": "V7", "v8": "V8"}.get(family, "V3 / 更早版本")
+
+    def _loaded_label(self):
+        """V8 also says whether the runner loaded the deployable student or the privileged teacher."""
+        label = self._family_label(self.family)
+        if self.family == "v8":
+            label += " 学生 (可部署)" if getattr(self.runner, "student", False) else " 教师 (特权, 仅仿真)"
+        return label
 
     def _run_choices(self):
         runs = set(list_viewer_runs()) | {self.run_dir.resolve()}
@@ -257,7 +264,7 @@ class TwoStageViewer:
     def _refresh_header(self):
         self.md_header.content = (
             f"### 两级策略查看器 · MuJoCo\n"
-            f"**{self._family_label(self.family)}** · 运行 `{self.run_dir.name}`\n\n"
+            f"**{self._loaded_label()}** · 运行 `{self.run_dir.name}`\n\n"
             f"HOMIE `{self.homie_checkpoint.name}` (iter {self.runner.lowlevel.iteration}) · 控制 {1 / self.dt:.0f} Hz")
 
     # ------------------------------------------------------------------ GUI
@@ -364,7 +371,7 @@ class TwoStageViewer:
 
     def _refresh_policy_md(self):
         it = self.policy.iteration if self.policy is not None else "-"
-        self.md_policy.content = (f"**{self._family_label(self.family)}** · 检查点 `{self.hl_checkpoint.name}` · 训练迭代 **{it}** · 上层 **{'开' if self.runner.hl is not None else '关 (直通)'}** · "
+        self.md_policy.content = (f"**{self._loaded_label()}** · 检查点 `{self.hl_checkpoint.name}` · 训练迭代 **{it}** · 上层 **{'开' if self.runner.hl is not None else '关 (直通)'}** · "
                                   f"level {self.runner.level}: 臂 {self.runner.lp.arm_scale:.2f} / 腰 {self.runner.lp.waist_scale:.2f} rad")
 
     def _apply_hl_switch(self):

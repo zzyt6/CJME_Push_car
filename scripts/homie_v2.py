@@ -70,7 +70,13 @@ def main():
     from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser(description='HOMIE G1 v2 (port-vs-official fixes) on local Isaac Lab 3 / Isaac Sim 6.0.1')
-    parser.add_argument('mode', choices=['smoke', 'train', 'play'])
+    parser.add_argument('mode', choices=['smoke', 'train', 'play', 'bank', 'balance_eval'])
+    parser.add_argument('--condition', choices=['nominal', 'disturbed'], default='nominal',
+                        help='balance_eval: no randomization, or the training randomization')
+    parser.add_argument('--balance', action='store_true', help='smoke/play the stand-still (balance) task')
+    parser.add_argument('--seconds', type=float, default=60., help='bank: simulated seconds to record')
+    parser.add_argument('--output', type=Path, default=ROOT / '.cache/homie_v2_balance/switch_bank.pt',
+                        help='bank: output file (the balance task reads this path)')
     parser.add_argument('--num_envs', type=int, default=32)
     parser.add_argument('--steps', type=int, default=100)
     parser.add_argument('--max_iterations', type=int, default=1000)
@@ -90,6 +96,12 @@ def main():
         parser.error('num_envs, steps, and max_iterations must be positive')
     if args.mode == 'play' and args.checkpoint is None:
         parser.error('play requires --checkpoint /path/to/model.pt')
+    if args.mode in ('bank', 'balance_eval') and args.checkpoint is None:
+        # The walking model the balance model is fine-tuned from.
+        args.checkpoint = ROOT / 'logs/rsl_rl/homie_g1/2026-09-14_15-10-07_my_policy/model_60000.pt'
+    if args.mode == 'balance_eval':
+        args.output = (ROOT / 'logs/homie_isaaclab_v2/balance_eval'
+                       / f'{args.checkpoint.parent.name}_{args.checkpoint.stem}_{args.condition}.json')
     if args.checkpoint is not None and not args.checkpoint.is_file():
         parser.error(f'Checkpoint not found: {args.checkpoint}')
     if args.record_ovd is not None:
@@ -101,8 +113,15 @@ def main():
         args.kit_args = (args.kit_args or '') + f' --/persistent/physics/omniPvdOvdRecordingDirectory={trace_dir.as_posix()} --/physics/omniPvdOutputEnabled=true'
     launcher = AppLauncher(args)
     try:
-        from homie_isaaclab_v2.run import run
-        run(args, launcher.app, ROOT)
+        if args.mode == 'bank':
+            from homie_isaaclab_v2.balance_bank import record
+            record(args, launcher.app, ROOT)
+        elif args.mode == 'balance_eval':
+            from homie_isaaclab_v2.balance_eval import evaluate
+            evaluate(args, launcher.app, ROOT)
+        else:
+            from homie_isaaclab_v2.run import run
+            run(args, launcher.app, ROOT)
     except BaseException:
         # Kit's close() can terminate the interpreter; print failures beforehand.
         import traceback

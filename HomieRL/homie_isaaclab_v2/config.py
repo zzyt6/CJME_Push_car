@@ -583,7 +583,12 @@ class G1RoughCfg( LeggedRobotCfg ):
             feet_contact_forces = -0.00025
             contact_momentum = 2.5e-4
             action_vanish = -1.0
-            stand_still = -0.15    
+            stand_still = -0.15
+            feet_still = 0.  # balance mode only (see class balance)
+            stance_height = 0.   # balance candidates, off until enabled in balance.reward_scales
+            com_centering = 0.
+            load_balance = 0.
+            pitch_band = 0.
         only_positive_rewards = False
         tracking_sigma = 0.25
         soft_dof_pos_limit = 0.975
@@ -598,6 +603,45 @@ class G1RoughCfg( LeggedRobotCfg ):
         least_knee_distance_lateral = 0.2
         clearance_height_target = 0.14
         
+    class balance:
+        """Stand-still model fine-tuned from the walking model; it takes over when |command| < 0.05.
+
+        Same observation, action and height definition as walking (height command 0.74 = pelvis 0.759 m,
+        the stage-2 grasp stance), so switching does not change the height. Velocity commands stay zero.
+        Episodes start either from walk-to-stop snapshots of the walking policy (feet wherever they
+        landed) or from the stage-2 grasp stance. No leg posture is pinned: feet stay where they are.
+        """
+        enabled = False
+        # Walk-to-stop snapshots recorded with `run_homie_v2.ps1 bank` (state, observation history, actions).
+        bank_path = '.cache/homie_v2_balance/switch_bank.pt'
+        bank_ratio = 0.7
+        # Stage-2 grasp stance: pelvis pose, leg and arm joints of the push-cart start.
+        stance_path = 'HomieRL/homie_pushcart/config/initial_pose.yaml'
+        stance_joint_noise = 0.02        # rad, uniform
+        stance_root_vel = 0.05           # m/s and rad/s, uniform
+        # At each upper-body interval, probability that the arm target is the grasp pose instead of a
+        # random curriculum pose: the stage-2 case of holding the handle.
+        upper_hold_prob = 0.3
+        # Upper-body curriculum ratio; the walking model reached 1.0 at iteration 16300.
+        upper_ratio = 1.0
+        # LIPM capture-point limit without a step (Pratt 2006): omega0 = sqrt(9.81 / 0.7) = 3.7 1/s,
+        # heel 0.06 m behind the ankle (URDF foot markers) -> 0.06 * 3.7 = 0.22 m/s backwards.
+        max_push_vel_xy = 0.2
+        # Walking model's zero-command pelvis pitch (homie_stance.yaml) and the free band around it.
+        pitch_ref = 0.019
+        pitch_band = 0.03
+        # A step (foot off ~0.4 s, moved ~0.3 m) costs ~1.0, against ~0.24 for keeping a staggered stance
+        # for the rest of an episode, and far less than a fall.
+        # Run 1 (stepping terms only) stopped stepping within 200 iterations but by 600 the stance had
+        # drifted: pelvis 0.7552 m (-4 mm) and pitch -0.081 rad (4.6 deg back), which the weak
+        # orientation / height terms never resisted. Posture terms, scaled from model_60200's standing
+        # values (height error ~2.3 mm, CoM 2.9 cm off the foot centre, 3.6 % load imbalance):
+        reward_scales = {'stand_still': -1.0, 'feet_still': -2.0,
+                         'stance_height': 2.0,      # exp(-(e/5 mm)^2) on the absolute grasp-stance pelvis height
+                         'com_centering': -20.,     # 3 cm -> -0.02/s, 10 cm -> -0.2/s
+                         'load_balance': -1.0,
+                         'pitch_band': -5.0}        # run-1 drift (0.07 rad beyond the band) -> -0.35/s
+
     class env( LeggedRobotCfg.rewards ):
         num_envs = 4096
         num_actions = 12

@@ -1,0 +1,35 @@
+{
+  "lcm_url": "udpm://239.255.76.67:7667?ttl=255",
+  "onnx_threads": 2,
+  "stand_ramp_s": 3.0,
+  "joystick": {
+    "_comment": "task command (cart frame) while L1 is held; first-test limits, training range is vx -0.6..0.9, vy 0.25, wz 0.6",
+    "deadzone": 0.1,
+    "vx_max": 0.4,
+    "vx_min": -0.2,
+    "vy_max": 0.1,
+    "wz_max": 0.3
+  },
+  "camera": {
+    "udp_port": 9870,
+    "tag_id": 0,
+    "tag_mount": "vertical_rear",
+    "_cam_rpy_comment": "camera link in torso_link, rad; default = g1.urdf d435_joint (0, 0.8308, 0). Measure your D455 mount.",
+    "cam_rpy_in_torso": [0.0, 0.8307767239493009, 0.0],
+    "calibration_file": "calib/cart_yaw.json",
+    "timeout_s": 0.3,
+    "outlier_rad": 0.8
+  },
+  "hands": {
+    "_comment": "Dex-3 targets for hand_control (left 7, right 7: thumb 0-2, middle 0-1, index 0-1). 'fist' = hand_control's own closed default; 'fit' = the V7 simulated grasp on the 22 mm bar",
+    "grasp": "fist",
+    "open": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "fist": [0.0, 1.05, 1.75, -1.57, -1.75, -1.57, -1.75, 0.0, -1.05, -1.75, 1.57, 1.75, 1.57, 1.75],
+    "ramp_s": 0.5
+  },
+  "safety": {
+    "tilt_limit": 0.8,
+    "state_timeout_s": 0.05,
+    "max_overrun_ticks": 5
+  }
+}

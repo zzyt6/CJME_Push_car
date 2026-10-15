@@ -1,0 +1,11 @@
+# Append these lines to the END of HomieDeploy/unitree_sdk2/CMakeLists.txt on the robot (after hand_control),
+# with g1_control_v81.cpp copied next to g1_control.cpp. Same build recipe as g1_control.
+
+add_executable(g1_control_v81 g1_control_v81.cpp)
+
+target_link_libraries(g1_control_v81 PRIVATE unitree_sdk2 ddsc ddscxx Threads::Threads lcm_types_lib lcm)
+
+target_include_directories(g1_control_v81 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcm_types)

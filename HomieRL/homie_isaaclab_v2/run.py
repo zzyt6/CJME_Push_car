@@ -18,6 +18,7 @@ def run(args, app, root):
     torch.manual_seed(args.seed)
     cfg = G1RoughCfg()
     cfg.env.num_envs = args.num_envs
+    cfg.balance.enabled = getattr(args, 'balance', False)
     # Playback is deterministic by default.  A separate opt-in mode enables
     # only the upper-body pose curriculum used by HOMIE training; it does not
     # turn on mass, friction, pushes, delays, or observation noise.
@@ -90,7 +91,11 @@ def run(args, app, root):
                   'timeout_reset': True, 'physics_parameters': 'PASS', 'actor_shape': list(obs.shape),
                   'critic_shape': list(critic.shape), 'joint_names': env.dof_names,
                   'lab_joint_ids': env.joint_ids.tolist(), 'randomization': cfg.domain_rand.use_random}
-        path = root / 'logs/homie_isaaclab_v2/smoke_result.json'
+        if cfg.balance.enabled:
+            assert not env.commands[:, :4].any(), 'balance commands must stay zero'
+            assert torch.all(env.commands[:, 4] == cfg.rewards.base_height_target)
+            result['balance'] = env.physics_report['balance']
+        path = root / f'logs/homie_isaaclab_v2/smoke_result{"_balance" if cfg.balance.enabled else ""}.json'
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(result, indent=2), encoding='utf-8')
         if args.record_ovd is not None:

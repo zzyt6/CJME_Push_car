@@ -1,0 +1,5 @@
+numpy
+onnxruntime          # Jetson: the aarch64 wheel from pip, or NVIDIA's onnxruntime-gpu build (CPU provider is used)
+lcm
+opencv-python>=4.7          # cv2.aruco (in the main package since 4.7) with the AprilTag 36h11 dictionary (tag_camera.py)
+pyrealsense2

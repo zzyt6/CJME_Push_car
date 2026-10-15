@@ -195,6 +195,11 @@ class HomieTaskCore:
         Args:
             env_ids (List[int]): Environments ids for which new commands are needed
         """
+        if self.cfg.balance.enabled:
+            # Standing still at the walking model's standing height.
+            self.commands[env_ids, :4] = 0.
+            self.commands[env_ids, 4] = self.cfg.rewards.base_height_target
+            return
         set_x = torch.rand(len(env_ids), 1).to(self.device)
         is_height = set_x < 1/3
         is_vel = set_x > 1/2
@@ -524,6 +529,11 @@ class HomieTaskCore:
         contacts = torch.sum(self.contact_forces[:, self.feet_indices, 2] < 0.1, dim=-1)
         error_sim = (contacts) * (self.commands[:, 4] >= 0.735)
         return error_sim * (torch.norm(self.commands[:, :3], dim=1) < 0.1)
+
+    def _reward_feet_still(self):
+        # Foot speed whether in contact or not: stepping and sliding both cost. Velocity rather than
+        # displacement from a reference, so a foot that has moved is never pulled back by a corrective step.
+        return torch.sum(torch.norm(self.feet_vel, dim=-1), dim=1)
 
     def _init_task_buffers(self):
         # initialize some data used later on
